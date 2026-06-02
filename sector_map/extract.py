@@ -56,42 +56,165 @@ def _loc(path: Path) -> int:
         return 0
 
 
-def _py_symbols(path: Path) -> list[str]:
+# ── universal parsing via tree-sitter (all languages, one dependency) ─────────
+# suffix → (grammar, {top-level definition node types})
+LANGS = {
+    ".py": ("python", {"function_definition", "class_definition"}),
+    ".kt": ("kotlin", {"class_declaration", "function_declaration", "object_declaration", "interface_declaration"}),
+    ".kts": ("kotlin", {"class_declaration", "function_declaration", "object_declaration"}),
+    ".java": ("java", {"class_declaration", "interface_declaration", "enum_declaration", "record_declaration"}),
+    ".go": ("go", {"function_declaration", "method_declaration", "type_declaration"}),
+    ".ts": ("typescript", {"function_declaration", "class_declaration", "interface_declaration", "enum_declaration", "type_alias_declaration"}),
+    ".tsx": ("tsx", {"function_declaration", "class_declaration", "interface_declaration", "enum_declaration"}),
+    ".js": ("javascript", {"function_declaration", "class_declaration"}),
+    ".jsx": ("javascript", {"function_declaration", "class_declaration"}),
+    ".mjs": ("javascript", {"function_declaration", "class_declaration"}),
+    ".rs": ("rust", {"function_item", "struct_item", "enum_item", "trait_item", "mod_item"}),
+    ".rb": ("ruby", {"method", "class", "module"}),
+    ".c": ("c", {"function_definition", "struct_specifier"}),
+    ".h": ("c", {"function_definition", "struct_specifier"}),
+    ".cc": ("cpp", {"function_definition", "class_specifier", "struct_specifier"}),
+    ".cpp": ("cpp", {"function_definition", "class_specifier", "struct_specifier"}),
+    ".hpp": ("cpp", {"function_definition", "class_specifier", "struct_specifier"}),
+    ".swift": ("swift", {"function_declaration", "class_declaration", "protocol_declaration", "struct_declaration"}),
+    ".php": ("php", {"function_definition", "class_declaration", "interface_declaration"}),
+}
+_IMPORT_TYPES = {"import_statement", "import_from_statement", "import_declaration",
+                 "import_header", "import_spec", "use_declaration"}
+_parsers: dict = {}
+
+
+def _get_parser(lang: str):
+    if lang not in _parsers:
+        try:
+            from tree_sitter_language_pack import get_parser
+            _parsers[lang] = get_parser(lang)
+        except Exception:
+            _parsers[lang] = None
+    return _parsers[lang]
+
+
+def _tree(path: Path):
+    """(grammar, root_node, def_types) or None if unsupported/unparseable."""
+    spec = LANGS.get(path.suffix)
+    if not spec:
+        return None
+    parser = _get_parser(spec[0])
+    if parser is None:
+        return None
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
-    except (SyntaxError, OSError):
-        return []
-    return [n.name for n in tree.body
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            and not n.name.startswith("_")]
-
-
-def _py_imports(path: Path) -> list[str]:
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
-    except (SyntaxError, OSError):
-        return []
-    mods = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            mods += [a.name.split(".")[0] for a in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            mods.append(node.module.split(".")[0])
-    return mods
-
-
-def _kt_symbols(path: Path) -> list[str]:
-    try:
-        return [m.group(2) for m in KT_SYM.finditer(path.read_text(encoding="utf-8", errors="ignore"))]
+        return spec[0], parser.parse(path.read_bytes()).root_node, spec[1]
     except OSError:
-        return []
+        return None
 
 
-def _kt_imports(path: Path) -> list[str]:
-    try:
-        return KT_IMP.findall(path.read_text(encoding="utf-8", errors="ignore"))
-    except OSError:
-        return []
+def _node_name(n):
+    f = n.child_by_field_name("name")
+    if f:
+        return f.text.decode("utf-8", "ignore")
+    for c in n.children:
+        if c.type in ("type_spec", "type_alias", "type_alias_declaration"):
+            inner = _node_name(c)
+            if inner:
+                return inner
+        if "identifier" in c.type:
+            return c.text.decode("utf-8", "ignore")
+    return None
+
+
+def _symbols(path: Path) -> list[str]:
+    """Top-level definition names in ANY language (via tree-sitter)."""
+    t = _tree(path)
+    if not t:
+        return _fallback_symbols(path)
+    _, root, defs = t
+    out = []
+    for c in root.children:
+        node = c
+        if c.type in ("export_statement", "decorated_definition"):  # unwrap ts export / py decorator
+            node = next((g for g in c.children if g.type in defs), None)
+        if node and node.type in defs:
+            nm = _node_name(node)
+            if nm:
+                out.append(nm)
+    return out
+
+
+def _import_path(node, lang: str):
+    txt = node.text.decode("utf-8", "ignore")
+    if lang == "kotlin":
+        m = txt.replace("import", "", 1).strip()
+        return m.split(" as ")[0].strip().rstrip(".*").rstrip(".")
+    if lang == "python":
+        if node.type == "import_from_statement":
+            mn = node.child_by_field_name("module_name")
+            return mn.text.decode("utf-8", "ignore") if mn else None
+        for c in node.children:
+            if c.type == "dotted_name":
+                return c.text.decode("utf-8", "ignore")
+        return None
+    if lang == "go":
+        return txt.strip().split()[-1].strip('"`') if node.type == "import_spec" else None
+    if lang in ("typescript", "tsx", "javascript"):
+        src = node.child_by_field_name("source")
+        return src.text.decode("utf-8", "ignore").strip("'\"") if src else None
+    if lang == "rust":
+        return txt.replace("use", "", 1).strip().rstrip(";").strip()
+    if lang == "java":
+        return txt.replace("import", "", 1).replace("static", "", 1).strip().rstrip(";").strip()
+    if lang == "swift":
+        return txt.replace("import", "", 1).strip()
+    return None
+
+
+def _imports(path: Path) -> list[str]:
+    """Import paths in ANY language (via tree-sitter)."""
+    t = _tree(path)
+    if not t:
+        return _fallback_imports(path)
+    lang, root, _ = t
+    out = []
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type in _IMPORT_TYPES:
+            p = _import_path(n, lang)
+            if p:
+                out.append(p)
+        stack += list(n.children)
+    return out
+
+
+def _fallback_symbols(path: Path) -> list[str]:  # only if a grammar is missing
+    if path.suffix == ".py":
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+            return [n.name for n in tree.body
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and not n.name.startswith("_")]
+        except (SyntaxError, OSError):
+            return []
+    if path.suffix in (".kt", ".kts") and path.exists():
+        return [m.group(2) for m in KT_SYM.finditer(path.read_text(errors="ignore"))]
+    return []
+
+
+def _fallback_imports(path: Path) -> list[str]:
+    if path.suffix == ".py":
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+            mods = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    mods += [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    mods.append(node.module)
+            return mods
+        except (SyntaxError, OSError):
+            return []
+    if path.suffix in (".kt", ".kts") and path.exists():
+        return KT_IMP.findall(path.read_text(errors="ignore"))
+    return []
 
 
 def _git(root: Path, args: list[str]) -> str:
@@ -171,21 +294,20 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     prefix = prof.get("import_prefix", "")
     is_kt = lang == "kt"
 
-    sym_fn = _kt_symbols if is_kt else _py_symbols
-    imp_fn = _kt_imports if is_kt else _py_imports
-    code_suffix = ".kt" if is_kt else ".py"
+    resolve_mode = prof.get("resolve", "py_stem")        # 'py_stem' | 'kt_pkg' (package prefix)
+    prefix_norm = prefix.replace(".", "/").replace("::", "/")
 
-    # gather per sector
+    # gather per sector — UNIVERSAL tree-sitter parsing (any language by suffix)
     raw: dict[str, dict] = {}
     for s in prof["sectors"]:
         d = src_base / s["root"]
         files = _walk(d)
-        code = [f for f in files if f.suffix == code_suffix]
+        code = [f for f in files if f.suffix in LANGS]
         symbols, imps = [], []
         for f in code:
-            symbols += sym_fn(f)
-            imps += imp_fn(f)
-        # tests
+            symbols += _symbols(f)
+            imps += _imports(f)
+        # tests (conventions are language-specific → profile-driven)
         tfiles, tcount = [], 0
         if is_kt and test_base:
             td = test_base / s["root"]
@@ -196,25 +318,28 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
             tks = [f for f in files if f.name.startswith("test_") and f.suffix == ".py"]
             tfiles = [str(f.relative_to(repo)) for f in tks]
             for t in tks:
-                tcount += sum(1 for n in ast.walk(ast.parse(t.read_text(errors="ignore")))
-                              if isinstance(n, ast.FunctionDef) and n.name.startswith("test")) if t.exists() else 0
+                try:
+                    tcount += sum(1 for n in ast.walk(ast.parse(t.read_text(errors="ignore")))
+                                  if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
+                except (SyntaxError, OSError):
+                    pass
         raw[s["id"]] = dict(files=files, code=code, symbols=symbols, imps=imps,
                             loc=sum(_loc(f) for f in files), tfiles=tfiles, tcount=tcount, dir=d)
 
-    # import → sector resolution
+    # import → sector resolution (universal): flat-module stem, or package prefix.
     stem_map = {f.stem: sid for sid, r in raw.items() for f in r["code"]}
-    roots = sorted(((s["id"], s["root"].replace("/", ".")) for s in prof["sectors"]),
-                   key=lambda x: -len(x[1]))
+    roots = sorted(((s["id"], s["root"]) for s in prof["sectors"]), key=lambda x: -len(x[1]))
 
     def resolve(imp: str) -> str | None:
-        if is_kt:
-            if prefix and imp.startswith(prefix):
-                suf = imp[len(prefix):]
-                for sid, rd in roots:
-                    if suf == rd or suf.startswith(rd + "."):
-                        return sid
-            return None
-        return stem_map.get(imp)
+        p = imp.replace(".", "/").replace("::", "/")
+        if resolve_mode == "py_stem":
+            return stem_map.get(p.split("/")[0])
+        if prefix_norm and p.startswith(prefix_norm):
+            p = p[len(prefix_norm):].lstrip("/")
+        for sid, root in roots:
+            if p == root or p.startswith(root + "/"):
+                return sid
+        return None
 
     hard: dict[tuple[str, str], int] = {}
     for sid, r in raw.items():
@@ -224,7 +349,7 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                 hard[(sid, b)] = hard.get((sid, b), 0) + 1
 
     edges = [{"src": a, "dst": b, "weight": w, "kind": "depends_on"} for (a, b), w in hard.items()]
-    if not is_kt:  # prose references only meaningful for the doc repo
+    if resolve_mode == "py_stem":  # prose references only meaningful for the flat-module doc repo
         blobs = {sid: _blob(r["files"], TEXT_SUFFIX) for sid, r in raw.items()}
         for a in raw:
             for b in raw:
@@ -260,7 +385,7 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     sectors_meta = []
     for s in prof["sectors"]:
         sid, r = s["id"], raw[s["id"]]
-        blob = _blob(r["code"], {code_suffix})
+        blob = _blob(r["code"], set(LANGS))
         blast = direct_consumers(sid)
         cyc = cycles_with(sid)
         deps = sorted({b for (a, b) in hard if a == sid})

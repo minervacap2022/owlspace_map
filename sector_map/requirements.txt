@@ -1,0 +1,8 @@
+# sector_map dependencies
+# tree-sitter + the language pack bundle 100+ grammars (Python, Kotlin, Java,
+# Go, TS/JS, Rust, C/C++, Ruby, Swift, PHP, …) in one install — this is what
+# makes the extractor language-agnostic. The map degrades gracefully (Python ast
+# / Kotlin regex fallback) if a grammar is missing, so it never hard-fails.
+tree-sitter>=0.23
+tree-sitter-language-pack>=0.9
+PyYAML>=6.0
