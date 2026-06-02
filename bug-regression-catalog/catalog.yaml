@@ -1771,3 +1771,61 @@ bugs:
       the new name AND `DELETE /v1/channels/:id` returns 200 {"deleted":true}. A 403
       on either (for the creator) => the admin-only regression is back. Built-in
       channels (kind != 'standard') must still return 403 on both.
+
+  - id: BUG-2026-06-02-9c936c
+    title: owlbot cwdStrategy "fixed" had no path input — silently fell back to defaultCwd
+    date: 2026-06-02
+    surface: frontend
+    source_files:
+      - owl-agent/apps/owlspace/src/renderer/pages/OwlbotsPage.tsx
+      - owl-agent/packages/owl-agent-server/src/http/routes/agents.ts
+    user_visible_symptom: |
+      The Owlbots editor's "Cwd strategy" select offered "fixed", but there was NO
+      field to enter the path — so fixedCwd was never set and the runtime's
+      allocateCwd() fell back to defaultCwd (registry: `agent.config.fixedCwd || this.defaultCwd`).
+      The config field existed end-to-end (AgentConfig.fixedCwd, allocateCwd) but
+      the UI never exposed it AND the /api/agents serializer omitted it (so it
+      couldn't even load a previously-set value). Fix: add a conditional path Input
+      (shown when cwdStrategy === "fixed") + add fixedCwd to the AgentInfo type, the
+      edit draft, and the serializer so it round-trips. Local owlbots only — cloud
+      owls force "sandbox".
+    lint:
+      pattern: "fixedCwd"
+      path: owl-agent/packages/owl-agent-server/src/http/routes/agents.ts
+      description: The /api/agents serializer must include fixedCwd, or the Owlbots "fixed" cwd input can't load a saved path. Match count must be >= 1.
+    chaos:
+      runner: null
+    observable_signal: |
+      In the Owlbots editor, pick Cwd strategy = "fixed" → a path input appears;
+      enter "/tmp/x", save, reopen → the input still shows "/tmp/x" (round-trips via
+      serializer→draft→input). GET /api/agents returns fixedCwd for that agent. No
+      input shown, or fixedCwd absent from /api/agents => the regression is back.
+
+  - id: BUG-2026-06-02-a79689
+    title: invited channel owlbots stayed silent — AddOwlbotPicker hardcoded always_on=false (mention-only)
+    date: 2026-06-02
+    surface: frontend
+    source_files:
+      - owl-agent/apps/owlspace/src/renderer/pages/channels/AddOwlbotPicker.tsx
+      - owl-agent/apps/owlspace/src/renderer/lib/owl-backend.ts
+    user_visible_symptom: |
+      A user created a channel, invited owlbots (e.g. Sage, Default), typed plain
+      messages, and got ZERO replies. The bots WERE connected and saw the messages
+      (bot-pool: "msg ... content=Hiii") but logged decision=false, because
+      always_on=false and there was no @-mention: the pool's decision function
+      returns ctx.alwaysOn when no mention is present (bot-pool.ts). Root cause:
+      AddOwlbotPicker.tsx invited with always_on=false (hardcoded), and the lib
+      default was also false — overriding the backend's intended default
+      (always_on true, "respond to every message, matching DM behavior"). Fix:
+      default the picker + owlBackend.channels.addOwlbot to always_on=true.
+    lint:
+      pattern: 'addOwlbot.channel.id, backendUuid, true.'
+      path: owl-agent/apps/owlspace/src/renderer/pages/channels/AddOwlbotPicker.tsx
+      description: AddOwlbotPicker must invite owlbots with always_on=true so they reply to every message, not only @-mentions. Match count must be >= 1.
+    chaos:
+      runner: null
+    observable_signal: |
+      Invite an owlbot to a channel, post a plain (no @mention) message → the
+      owlbot replies. channel_members.always_on = true for that (channel, agent).
+      decision=false in the bot-pool log for a non-mention human message => the
+      mention-only regression is back.
