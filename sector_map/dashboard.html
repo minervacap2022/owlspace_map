@@ -41,6 +41,7 @@
   .edge{stroke:var(--line);fill:none}
   .edge.dep{stroke:#3a4350;stroke-width:1.6}
   .edge.ref{stroke:#262d36;stroke-dasharray:3 4;stroke-width:1.1}
+  .edge.cyc{stroke:var(--amber);stroke-opacity:.72;stroke-width:1.7;stroke-dasharray:5 3}
   .edge.hot{stroke:var(--red);stroke-width:2.4;opacity:.95}
   .dim{opacity:.18}
   /* keystone */
@@ -108,8 +109,9 @@
     <span><i style="background:var(--red)"></i>uncovered code</span>
     <span><i style="background:var(--dim)"></i>docs</span>
     <span><i style="background:#3a4350"></i>depends&nbsp;on (import)</span>
+    <span><i style="background:var(--amber)"></i>dependency cycle (clean-arch smell)</span>
     <span><i style="background:#262d36"></i>references (prose)</span>
-    <span class="mut">— node size = blast radius · hover a node to see what it would break</span>
+    <span class="mut">— size = blast radius · <b>bottom = most depended-on, top = leaf</b> · hover to see what breaks</span>
   </div>
 
   <div class="grid2">
@@ -121,6 +123,8 @@
             <path d="M0,0 L8,3 L0,6 Z" fill="#3a4350"/></marker>
           <marker id="arrhot" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
             <path d="M0,0 L8,3 L0,6 Z" fill="#f85149"/></marker>
+          <marker id="arrcyc" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#d29922"/></marker>
         </defs>
         <g id="edges"></g><g id="nodes"></g>
       </svg>
@@ -176,28 +180,54 @@ function render(g){
   renderGraph(g); renderPicker(g); renderCards(g);
 }
 
+const SVGNS="http://www.w3.org/2000/svg";
 function renderGraph(g){
-  const S=g.sectors, N=S.length, cx=360, cy=170, R=128;
+  const S=g.sectors, W=720, H=340;
+  const blastOf=s=>s.dimensions.change_safety.blast_count;
+  // depends_on adjacency + transitive reachability — used to flag cycle edges/members.
+  const adj={}; S.forEach(s=>adj[s.id]=[]);
+  g.edges.forEach(e=>{if(e.kind==="depends_on"&&adj[e.src]&&e.src!==e.dst)adj[e.src].push(e.dst);});
+  const reach={};
+  S.forEach(s=>{const seen=new Set(),stk=adj[s.id].slice();
+    while(stk.length){const x=stk.pop();if(seen.has(x))continue;seen.add(x);(adj[x]||[]).forEach(y=>stk.push(y));}
+    reach[s.id]=seen;});
+  const isCyc=(src,dst)=>!!(reach[dst]&&reach[dst].has(src));   // dst depends back on src → cyclic edge
+  const cycMember=id=>!!(reach[id]&&reach[id].has(id));         // id sits on a cycle
+
+  // LAYERED layout: y = blast rank (most depended-on at the BOTTOM, leaf at the TOP);
+  // x spreads sectors sharing a rank. The shape now encodes the architecture, not a ring.
+  const ranks=[...new Set(S.map(blastOf))].sort((a,b)=>b-a);    // high→low  ==  bottom→top
+  const padT=48,padB=42,padX=76, rowY={};
+  const gap=ranks.length>1?(H-padT-padB)/(ranks.length-1):0;
+  ranks.forEach((v,r)=>rowY[v]=H-padB-r*gap);
+  const rows={}; S.forEach(s=>{(rows[blastOf(s)]=rows[blastOf(s)]||[]).push(s);});
   const pos={};
-  S.forEach((s,i)=>{const a=-Math.PI/2+i*2*Math.PI/N;pos[s.id]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)};});
+  Object.values(rows).forEach(row=>{
+    row.sort((a,b)=>a.id<b.id?-1:1);
+    const n=row.length, span=W-2*padX;
+    row.forEach((s,i)=>pos[s.id]={x:n===1?W/2:padX+span*i/(n-1),y:rowY[blastOf(s)]});
+  });
+
   const E=document.getElementById("edges"), Nd=document.getElementById("nodes");
   E.innerHTML="";Nd.innerHTML="";
   g.edges.forEach(e=>{
     const a=pos[e.src],b=pos[e.dst];if(!a||!b)return;
-    const p=document.createElementNS("http://www.w3.org/2000/svg","path");
-    const mx=(a.x+b.x)/2,my=(a.y+b.y)/2-18;
+    const p=document.createElementNS(SVGNS,"path");
+    const dx=b.x-a.x,dy=b.y-a.y;                       // bow perpendicular so parallel edges separate
+    const mx=(a.x+b.x)/2-dy*0.10, my=(a.y+b.y)/2+dx*0.10;
     p.setAttribute("d",`M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`);
-    p.setAttribute("class","edge "+(e.kind==="depends_on"?"dep":"ref"));
-    if(e.kind==="depends_on")p.setAttribute("marker-end","url(#arr)");
-    p.dataset.src=e.src;p.dataset.dst=e.dst;p.dataset.kind=e.kind;
+    const cyc=e.kind==="depends_on"&&isCyc(e.src,e.dst);
+    p.setAttribute("class","edge "+(cyc?"cyc":e.kind==="depends_on"?"dep":"ref"));
+    if(e.kind==="depends_on")p.setAttribute("marker-end",cyc?"url(#arrcyc)":"url(#arr)");
+    p.dataset.src=e.src;p.dataset.dst=e.dst;p.dataset.kind=e.kind;p.dataset.cyc=cyc?"1":"";
     E.appendChild(p);
   });
   S.forEach(s=>{
-    const p=pos[s.id], blast=s.dimensions.change_safety.blast_count;
-    const r=12+Math.min(blast,4)*4;
-    const grp=document.createElementNS("http://www.w3.org/2000/svg","g");
+    const p=pos[s.id], blast=blastOf(s), r=12+Math.min(blast,4)*4, cyc=cycMember(s.id);
+    const grp=document.createElementNS(SVGNS,"g");
     grp.setAttribute("class","node");grp.setAttribute("transform",`translate(${p.x},${p.y})`);
     grp.innerHTML=`<circle r="${r}" fill="${colorOf(s)}" fill-opacity=".22" stroke="${colorOf(s)}" stroke-width="1.8"/>`+
+      (cyc?`<circle r="${r+4}" fill="none" stroke="var(--amber)" stroke-opacity=".55" stroke-width="1" stroke-dasharray="3 3"/>`:"")+
       `<text text-anchor="middle" y="-${r+8}">${esc(s.id)}</text>`+
       `<text text-anchor="middle" class="sub" y="-${r-4}">blast ${blast}</text>`;
     grp.onmouseenter=()=>hot(s.id);grp.onmouseleave=()=>unhot();
@@ -218,7 +248,7 @@ function hot(id){
 function unhot(){
   document.querySelectorAll("#nodes .node,.edge").forEach(n=>n.classList.remove("dim"));
   document.querySelectorAll("#edges .edge").forEach(p=>{p.classList.remove("hot");
-    if(p.dataset.kind==="depends_on")p.setAttribute("marker-end","url(#arr)");});
+    if(p.dataset.kind==="depends_on")p.setAttribute("marker-end",p.dataset.cyc?"url(#arrcyc)":"url(#arr)");});
 }
 
 function renderPicker(g){
