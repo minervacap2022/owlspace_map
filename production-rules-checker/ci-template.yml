@@ -1,0 +1,43 @@
+# REFERENCE TEMPLATE — production-rules-checker in a TARGET repo's CI.
+#
+# This is the cross-repo enforcement pattern: a target repo (klik | owl | eve) runs
+# the checker against its OWN code, scoped to its OWN rules + catalog lints, with the
+# checker + catalog pulled from owlspace_map as the single source of truth.
+#
+# This file does NOT run in owlspace_map (it lives outside .github/workflows on
+# purpose). To use it:
+#   1. Copy it into the target repo as .github/workflows/production-rules.yml
+#   2. Replace <PROJECT> with your project: klik | owl | eve
+#   3. (optional) pin owlspace_map to a tag/SHA via `ref:` for reproducibility
+#
+# Security: no untrusted event input is interpolated into run: steps (no
+# ${{ github.event.* }}), so there is no workflow-injection surface.
+
+name: production-rules
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. the target repo — the code being checked (checked out at the repo root)
+      - uses: actions/checkout@v4
+
+      # 2. the checker + catalog (single source of truth), into a side dir
+      - uses: actions/checkout@v4
+        with:
+          repository: minervacap2022/owlspace_map
+          path: .owlspace_map
+          # ref: <tag-or-sha>   # pin for reproducibility
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install PyYAML
+
+      # 3. run the checker scoped to THIS project's rules + catalog lints, against
+      #    this repo's tracked files. One project's rule can never fire on another's.
+      - name: production-rules-checker --project <PROJECT>
+        run: |
+          python3 .owlspace_map/production-rules-checker/scripts/validate_production_rules.py \
+            --project <PROJECT> $(git ls-files)
