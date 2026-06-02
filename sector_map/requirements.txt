@@ -11,3 +11,12 @@ defusedxml>=0.7
 # coverage (optional, for generating the Cobertura report the map ingests):
 #   coverage run --source=<dirs> -m pytest && coverage xml
 coverage>=7.0
+#
+# SCIP type-precise calls (optional) — NO python dep (scip_ingest.py is a dependency-free
+# protobuf decoder). Generate index.scip with an EXTERNAL indexer for your language:
+#   Python:     npx @sourcegraph/scip-python index --project-name X --output index.scip .
+#   TypeScript: npx @sourcegraph/scip-typescript index
+#   Kotlin:     scip-kotlin (Gradle plugin — needs a build)
+# Point the profile at it: {"scip_index": "index.scip", "scip_root": "."}. The map
+# auto-detects index.scip at the repo root; without one it uses the name-level heuristic.
+# Output carries "call_resolution": "scip (type-precise)" | "heuristic (name-level)".

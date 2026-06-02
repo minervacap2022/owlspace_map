@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 coverage.xml
 .coverage
+/index.scip
+*.scip
+!sector_map/tests_data/*.scip

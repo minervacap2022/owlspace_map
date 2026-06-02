@@ -493,7 +493,8 @@ def default_profile(repo: Path) -> dict:
     return {"label": repo.name, "lang": "py", "git_root": ".", "src_base": "",
             "test_base": "", "import_prefix": "", "resolve": "py_stem",
             "behavior": GUARD_SIGNS, "catalog_project": None, "sectors": sectors,
-            "boundaries_global": [], "boundaries_by_sector": {}, "deploy_symlinks": True}
+            "boundaries_global": [], "boundaries_by_sector": {}, "deploy_symlinks": True,
+            "scip_index": "index.scip" if (repo / "index.scip").exists() else None, "scip_root": "."}
 
 
 # ── the one builder ───────────────────────────────────────────────────────────
@@ -538,8 +539,28 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         raw[s["id"]] = dict(files=files, code=code, symbols=symbols, imps=imps, fimps=fimps,
                             loc=sum(_loc(f) for f in files), tfiles=tfiles, tcount=tcount, dir=d)
 
-    # drill-down: per-symbol nodes + the name-resolved call graph
-    syms, call_edges, sector_calls = _symbol_graph(raw, repo)
+    # drill-down: per-symbol nodes + the call graph. A SCIP index (scip-python /
+    # scip-kotlin / scip-typescript) gives TYPE-PRECISE calls (globally-unique
+    # symbols, type-checker-resolved); without one we fall back to the name-level
+    # heuristic. Either way the output shape is identical — labeled honestly.
+    scip_path = (repo / prof["scip_index"]) if prof.get("scip_index") else None
+    if scip_path and scip_path.exists():
+        import scip_ingest
+        _f2s = {str(f.relative_to(repo)): sid for sid, r in raw.items() for f in r["code"]}
+
+        def _fsec(rel):
+            if rel in _f2s:
+                return _f2s[rel]
+            for k, v in _f2s.items():
+                if k.endswith("/" + rel) or rel.endswith("/" + k):
+                    return v
+            return None
+        syms, call_edges, sector_calls = scip_ingest.precise_call_graph(
+            scip_path, repo, prof.get("scip_root", "."), _fsec)
+        call_resolution = "scip (type-precise)"
+    else:
+        syms, call_edges, sector_calls = _symbol_graph(raw, repo)
+        call_resolution = "heuristic (name-level)"
     sector_syms: dict[str, list] = {}
     for s in syms.values():
         sector_syms.setdefault(s["sector"], []).append(s)
@@ -720,7 +741,7 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     return {"repo": prof.get("label", repo.name), "repo_path": str(repo),
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "remote": remote, "sectors": sectors_meta, "edges": edges,
-            "symbols": symbols_out,
+            "symbols": symbols_out, "call_resolution": call_resolution,
             "sector_calls": [{"src": a, "dst": b, "weight": w} for (a, b), w in sector_calls.items()]}
 
 

@@ -127,6 +127,28 @@ class MultiLangEdges(unittest.TestCase):
         self.assertEqual(cov["test_count"], 1)
 
 
+class Scip(unittest.TestCase):
+    FX = Path(__file__).resolve().parent / "tests_data" / "real.scip"
+
+    def test_decoder_is_dependency_free(self):
+        import scip_ingest  # noqa
+        docs = scip_ingest.decode_scip(self.FX.read_bytes())
+        self.assertGreater(sum(len(d["occ"]) for d in docs), 0, "real SCIP index decodes")
+
+    def test_precise_call_graph_resolves_exact_callee(self):
+        import scip_ingest
+        # the fixture indexes new_bug_id.py, whose mint() calls _existing_ids()
+        fs = (lambda rel: "brc" if rel.endswith("new_bug_id.py") else None)
+        syms, edges, sec = scip_ingest.precise_call_graph(self.FX, Path("/x"), "", fs)
+        by = {s["id"]: s for s in syms.values()}
+        names = {s["name"] for s in syms.values()}
+        self.assertIn("mint", names)
+        self.assertIn("_existing_ids", names)
+        mint = next(s for s in syms.values() if s["name"] == "mint")
+        self.assertIn("_existing_ids", {by[o]["name"] for o in mint["out"]},
+                      "SCIP should resolve mint → _existing_ids precisely")
+
+
 class Coverage(unittest.TestCase):
     def test_real_line_coverage_ingested(self):
         d = _write({
