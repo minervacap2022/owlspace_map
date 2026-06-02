@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Thin launcher so you can run `sectormap <cmd>` instead of `python3 .../cli.py`.
+# Symlink onto PATH for a global command:
+#   ln -s "$(pwd)/sector_map/sectormap" /usr/local/bin/sectormap
+# (or `pip install -e ./sector_map` to get the same command via pyproject.toml)
+exec python3 "$(dirname "$0")/cli.py" "$@"

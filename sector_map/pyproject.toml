@@ -1,0 +1,23 @@
+# Makes `sectormap` a real console command:  pip install -e ./sector_map
+# Then `sectormap init`, `sectormap brief <sector|path>`, etc. work from anywhere.
+[project]
+name = "sectormap"
+version = "0.1.0"
+description = "Profile-driven multi-language code-graph engine — the /no-new-bugs sector map"
+requires-python = ">=3.9"
+dependencies = [
+    "tree-sitter>=0.23",
+    "tree-sitter-language-pack>=0.9",
+    "PyYAML>=6.0",
+    "defusedxml>=0.7",
+]
+
+[project.scripts]
+sectormap = "cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["cli", "extract", "scip_ingest", "graphify_ingest"]
