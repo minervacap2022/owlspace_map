@@ -3,8 +3,12 @@
 # Go, TS/JS, Rust, C/C++, Ruby, Swift, PHP, …) in one install — this is what
 # makes the extractor language-agnostic. The map degrades gracefully (Python ast
 # / Kotlin regex fallback) if a grammar is missing, so it never hard-fails.
-tree-sitter>=0.23
-tree-sitter-language-pack>=0.9
+# PINNED for a reproducible env (verification-ladder rung 3). tree-sitter-language-pack
+# 1.x is a major API rewrite (parse() wants str not bytes; Tree/Node accessors changed)
+# that this engine does NOT target — an unpinned `>=0.9` let CI pull 1.8.1 and every
+# parse errored. Stay on the 0.13.x API. Bump deliberately (port the API) + re-run CI.
+tree-sitter==0.25.2
+tree-sitter-language-pack==0.13.0
 PyYAML>=6.0
 # defusedxml: hardened XML parsing for ingesting coverage reports (XXE-safe).
 defusedxml>=0.7
