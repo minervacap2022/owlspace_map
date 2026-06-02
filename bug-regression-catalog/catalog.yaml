@@ -1957,3 +1957,60 @@ bugs:
       KNOWN_UNENFORCED that has since been fixed/removed (staleness) — turns the
       loader suite red. chaos/catalog_no_lying_guards.sh wraps the same check for
       /full-stack-test phase 21.
+
+  - id: BUG-2026-06-03-df0347
+    title: sector_map default_profile hardcoded lang:py → non-Python repos got an empty blast radius (no cross-sector edges) under zero-config
+    date: 2026-06-03
+    surface: tooling-ci
+    source_files:
+      - sector_map/extract.py
+      - sector_map/test_extract.py
+    user_visible_symptom: |
+      Running the sector map on a fresh NON-Python repo with no tuned profile
+      (`sectormap init` -> default_profile) parsed symbols fine but produced ZERO
+      cross-sector dependency edges — every sector showed an empty blast radius, a
+      false "nothing depends on this". Root cause: default_profile hardcoded
+      lang:"py" / resolve:"py_stem", so a Go `import "svc/core"` (or any package-path
+      import) never resolved to a depends_on edge. Fixed by auto-detecting the
+      dominant language (file-suffix count) and picking resolve (py_stem for Python,
+      kt_pkg otherwise) plus a trailing-component fallback for package imports.
+    chaos:
+      runner: chaos/default_profile_detects_language.sh
+      description: Runs the sector_map DominantLang tests — a fresh Go repo's ui->core edge and a TS relative edge must resolve under default_profile, and a Python repo must stay (py, py_stem). Fails if default_profile regresses to a hardcoded language.
+    observable_signal: |
+      python3 sector_map/test_extract.py DominantLang
+      A Go repo (ui imports "svc/core") must yield a depends_on ui->core edge under
+      default_profile; a TS repo must detect lang=ts and resolve its relative edge;
+      a Python repo must stay (py, py_stem). If default_profile hardcodes the
+      language again, the Go/TS cross-sector edges vanish and these tests fail.
+
+  - id: BUG-2026-06-03-4774b3
+    title: sector_map guards green locally but RED on clean checkout — unpinned tree-sitter-language-pack let CI pull 1.8.1 (major API rewrite), every parse errored
+    date: 2026-06-03
+    surface: tooling-ci
+    source_files:
+      - sector_map/requirements.txt
+      - .github/workflows/guards.yml
+    user_visible_symptom: |
+      The guards workflow failed on GitHub's clean checkout while the suite passed on
+      the working tree — the classic unpinned-dependency divergence (verification
+      ladder rung 2 catching what rung 1 hid). requirements.txt had
+      `tree-sitter-language-pack>=0.9`, so CI resolved 1.8.1 — a major API rewrite
+      (Parser.parse() wants str not bytes; Tree/Node accessors changed) — and every
+      tree-sitter parse raised "argument 'source': 'bytes' object is not an instance
+      of 'str'". Local had 0.13.0. Fixed by pinning tree-sitter-language-pack==0.13.0
+      (and tree-sitter==0.25.2) so CI installs the exact API the engine targets.
+    lint:
+      rule: SECTORMAP_PINS_TREE_SITTER_LANGUAGE_PACK
+      pattern: 'tree-sitter-language-pack==0\.13\.0'
+      path: sector_map/requirements.txt
+      presence: required
+      message: requirements.txt must keep tree-sitter-language-pack pinned to ==0.13.0; the 1.x rewrite breaks every parse. An unpinned `>=` re-introduces the clean-checkout CI failure. Re-pin (and port the API) deliberately, never by accident.
+    chaos:
+      runner: null
+    observable_signal: |
+      A clean-env install from sector_map/requirements.txt followed by
+      `python3 sector_map/test_extract.py` must pass. If tree-sitter-language-pack is
+      unpinned (or bumped to 1.x without an API port), the engine's parse calls error
+      on a clean checkout — exactly what the guards.yml CI job caught. Enforced by the
+      pin (the lint above) plus guards.yml running the suite on every push.
