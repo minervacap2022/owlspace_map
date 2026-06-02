@@ -6,3 +6,8 @@
 tree-sitter>=0.23
 tree-sitter-language-pack>=0.9
 PyYAML>=6.0
+# defusedxml: hardened XML parsing for ingesting coverage reports (XXE-safe).
+defusedxml>=0.7
+# coverage (optional, for generating the Cobertura report the map ingests):
+#   coverage run --source=<dirs> -m pytest && coverage xml
+coverage>=7.0

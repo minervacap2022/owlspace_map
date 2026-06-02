@@ -127,6 +127,23 @@ class MultiLangEdges(unittest.TestCase):
         self.assertEqual(cov["test_count"], 1)
 
 
+class Coverage(unittest.TestCase):
+    def test_real_line_coverage_ingested(self):
+        d = _write({
+            "core/a.py": "def f():\n    return 1\ndef g():\n    return 2",
+            "coverage.xml": '<coverage><packages><package><classes>'
+            '<class filename="core/a.py"><lines>'
+            '<line number="1" hits="1"/><line number="2" hits="1"/>'
+            '<line number="3" hits="0"/><line number="4" hits="0"/>'
+            '</lines></class></classes></package></packages></coverage>'})
+        prof = _prof("py", "", ["core"])
+        prof["resolve"] = "py_stem"
+        tc = extract.build_graph(d, prof)["sectors"][0]["dimensions"]["tests_coverage"]
+        self.assertEqual(tc["coverage_pct"], 50, "2 of 4 lines covered")
+        self.assertTrue(any(u.startswith("g (") for u in tc["uncovered_surface"]),
+                        f"def g (line 3, 0 hits) should be uncovered: {tc['uncovered_surface']}")
+
+
 class SelfMap(unittest.TestCase):
     def test_owlspace_self_map_invariants(self):
         g = extract.build_graph()  # no profile → maps owlspace_map itself

@@ -91,6 +91,8 @@
   .symnode circle{cursor:pointer}
   .celledge{stroke:#39424f;fill:none;opacity:.55}
   .celledge.cross{stroke:var(--purple);opacity:.6;stroke-dasharray:2 3}
+  .covbar{height:6px;background:var(--line2);border-radius:3px;overflow:hidden;margin:4px 0 2px}
+  .covbar div{height:100%;transition:width .3s}
 </style>
 </head>
 <body>
@@ -251,7 +253,8 @@ function dval(name,d){
     (cs.cycles&&cs.cycles.length?`<div class="li"><span class="muted">⚠ dependency cycle with</span> ${chips(cs.cycles,"red")}</div>`:"")+
     `<div class="li"><span class="muted">observability</span> ${esc(cs.observability)}</div>`;}
   if(name==="tests & coverage"){const t=D.tests_coverage;
-    return `<div class="li"><span class="muted">coverage</span> ${t.covered?`<span class="chip green">${esc(t.coverage_label)}</span>`:`<span class="chip ${t.uncovered_surface.length?'red':'mut'}">${esc(t.coverage_label)}</span>`}</div>`+
+    const bar=t.coverage_pct!=null?`<div class="covbar"><div style="width:${t.coverage_pct}%;background:${t.coverage_pct>=70?'var(--green)':t.coverage_pct>=40?'var(--amber)':'var(--red)'}"></div></div>`:"";
+    return `<div class="li"><span class="muted">coverage</span> ${t.covered?`<span class="chip green">${esc(t.coverage_label)}</span>`:`<span class="chip ${t.uncovered_surface.length?'red':'mut'}">${esc(t.coverage_label)}</span>`}</div>`+bar+
       (t.test_files.length?`<div class="li mono">${t.test_files.map(esc).join("<br>")}</div>`:"")+
       (t.uncovered_surface.length?`<details><summary class="" style="color:#ffb4ab">${t.uncovered_surface.length} uncovered symbols — test first</summary><div class="mono">${t.uncovered_surface.map(esc).join("<br>")}</div></details>`:"");
   }

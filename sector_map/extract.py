@@ -323,6 +323,26 @@ def _defs_calls(path: Path):
     return defs, calls
 
 
+_extract_cache: dict = {}  # path -> (mtime, {symbols, imports, defs, calls})
+
+
+def _extract_file(path: Path) -> dict:
+    """All per-file extraction (symbols, imports, defs, calls) in ONE pass, cached
+    by mtime. A build walks each file once (not 3×), and an unchanged file is
+    skipped entirely on the next build — this is the real incremental win."""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {"symbols": [], "imports": [], "defs": [], "calls": []}
+    cached = _extract_cache.get(str(path))
+    if cached and cached[0] == mtime:
+        return cached[1]
+    defs, calls = _defs_calls(path)
+    data = {"symbols": _symbols(path), "imports": _imports(path), "defs": defs, "calls": calls}
+    _extract_cache[str(path)] = (mtime, data)
+    return data
+
+
 def _symbol_graph(raw: dict, repo: Path):
     """Build symbol nodes + a name-resolved call graph from the gathered code.
     Resolution prefers same-file → same-sector → global (capped); heuristic by
@@ -334,7 +354,8 @@ def _symbol_graph(raw: dict, repo: Path):
     for sid, r in raw.items():
         for f in r["code"]:
             rel = str(f.relative_to(repo))
-            defs, calls = _defs_calls(f)
+            ex = _extract_file(f)
+            defs, calls = ex["defs"], ex["calls"]
             for nm, kind, line in defs:
                 symid = f"{sid}::{rel}::{nm}:{line}"
                 syms[symid] = {"id": symid, "name": nm, "kind": kind, "sector": sid,
@@ -413,6 +434,46 @@ def _catalog_entries(project: str | None) -> list[tuple[str, str, list]]:
         return []
 
 
+def _coverage(repo: Path, report_rel: str | None) -> dict:
+    """Real per-line coverage from a Cobertura XML report (coverage.py --xml,
+    Kover, gcovr, jacoco→cobertura all emit it). {repo-relative-file: {line: hits}}."""
+    if not report_rel:
+        return {}
+    p = repo / report_rel
+    if not p.exists():
+        return {}
+    try:  # defusedxml hardens against XXE / billion-laughs (a report can be untrusted)
+        from defusedxml.ElementTree import parse as _xml_parse
+    except ImportError:
+        from xml.etree.ElementTree import parse as _xml_parse
+    try:
+        tree = _xml_parse(str(p))
+    except Exception:
+        return {}
+    out: dict[str, dict] = {}
+    for cls in tree.iter("class"):
+        fn = (cls.get("filename") or "").replace("\\", "/")
+        if not fn:
+            continue
+        lines = out.setdefault(fn, {})
+        for ln in cls.iter("line"):
+            try:
+                lines[int(ln.get("number"))] = int(ln.get("hits"))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def _cov_for(cov: dict, rel: str) -> dict:
+    """Line→hits for a repo-relative file, tolerating report roots (suffix match)."""
+    if rel in cov:
+        return cov[rel]
+    for k, v in cov.items():
+        if k.endswith("/" + rel) or rel.endswith("/" + k):
+            return v
+    return {}
+
+
 def _deploy_symlinks(sector: str, repo: Path) -> list[str]:
     out = []
     for c in (Path.home() / ".claude" / "skills" / sector, Path.home() / ".git-hooks" / sector):
@@ -458,8 +519,9 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         code = [f for f in files if f.suffix in LANGS]
         symbols, imps, fimps = [], [], []
         for f in code:
-            symbols += _symbols(f)
-            fis = _imports(f)
+            ex = _extract_file(f)
+            symbols += ex["symbols"]
+            fis = ex["imports"]
             imps += fis
             fimps += [(str(f.relative_to(repo)), imp) for imp in fis]
         # tests (conventions are language-specific → profile-driven)
@@ -551,6 +613,8 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         except Exception:
             catalog_projects = {}
 
+    cov = _coverage(repo, prof.get("coverage_report", "coverage.xml"))  # real line coverage if present
+
     sectors_meta = []
     for s in prof["sectors"]:
         sid, r = s["id"], raw[s["id"]]
@@ -598,10 +662,27 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         sector_incidents = [t for (_, t, srcs) in incidents
                             if any(f"app/{s['root']}/" in str(sf) for sf in srcs)]
 
-        covered = r["tcount"] > 0
-        uncovered = [] if covered else r["symbols"][:14]
-        cov_label = (f"{r['tcount']} tests" if covered
-                     else ("UNCOVERED" if r["code"] else "n/a (no code)"))
+        # Tests & Coverage: REAL line coverage when a report exists, else test counts.
+        lines_total = lines_cov = 0
+        cov_pct = None
+        precise_uncovered = []
+        for f in r["code"]:
+            lh = _cov_for(cov, str(f.relative_to(repo)))
+            lines_total += len(lh)
+            lines_cov += sum(1 for h in lh.values() if h > 0)
+        if lines_total:
+            cov_pct = round(100 * lines_cov / lines_total)
+            for sym in sector_syms.get(sid, []):
+                lh = _cov_for(cov, sym["file"])
+                if lh and lh.get(sym["line"], 1) == 0:
+                    precise_uncovered.append(f"{sym['name']} ({sym['file'].split('/')[-1]}:{sym['line']})")
+        covered = (cov_pct is not None and cov_pct > 0) or r["tcount"] > 0
+        if cov_pct is not None:
+            cov_label = f"{cov_pct}% lines ({lines_cov}/{lines_total}) · {r['tcount']} tests"
+            uncovered = precise_uncovered[:14] if cov_pct < 100 else []
+        else:
+            uncovered = [] if covered else r["symbols"][:14]
+            cov_label = (f"{r['tcount']} tests" if r["tcount"] else ("UNCOVERED" if r["code"] else "n/a (no code)"))
         kind = ("code+data" if r["code"] and any(f.suffix in {".yaml", ".yml"} for f in r["files"])
                 else "kotlin" if is_kt and r["code"] else "code" if r["code"] else "docs")
 
@@ -627,7 +708,7 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                                                     else "guards only" if invariants else "none")},
                 "tests_coverage": {"test_files": r["tfiles"], "test_count": r["tcount"],
                                    "covered": covered, "coverage_label": cov_label,
-                                   "uncovered_surface": uncovered},
+                                   "coverage_pct": cov_pct, "uncovered_surface": uncovered},
             },
         })
 
