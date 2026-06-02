@@ -1742,3 +1742,32 @@ bugs:
       default 10s = the directive ignored). And after a daemon-reload,
       `sudo journalctl --since '1 min ago' | grep -c "Unknown key name 'StartLimit"` => 0.
       A non-zero warning count or StartLimitIntervalUSec back at the default => it moved to [Service] again.
+
+  - id: BUG-2026-06-02-K
+    title: channels couldn't be renamed (no endpoint) or deleted by their non-admin creator (DELETE was admin-only); no sidebar affordance
+    date: 2026-06-02
+    surface: backend
+    source_files:
+      - owl-backend/src/routes/channels.ts
+      - owl-agent/apps/owlspace/src/renderer/components/app-shell/AppShell.tsx
+      - owl-agent/apps/owlspace/src/renderer/components/app-shell/SidebarMenu.tsx
+    user_visible_symptom: |
+      Users could create channels (any member) but could not delete them — DELETE
+      /v1/channels/:id was requireAdmin, so a non-admin who created a channel got
+      403 — and there was no rename endpoint at all, nor any right-click affordance
+      in the sidebar. Fix: PATCH /v1/channels/:id { name } (rename) + DELETE relaxed
+      to creator-OR-admin (built-ins still protected, cross-company still 404); the
+      sidebar grew a "channel" SidebarMenu type with Rename (RenameDialog) / Delete
+      (confirm) on standard channels only.
+    lint:
+      pattern: "Only the channel creator or an admin can delete it"
+      path: owl-backend/src/routes/channels.ts
+      description: DELETE /v1/channels/:id must allow the creator OR an admin (not requireAdmin), and a rename PATCH must exist — both with the creator-or-admin guard + built-in protection. Match count must be >= 1.
+    chaos:
+      runner: null
+    observable_signal: |
+      As a NON-admin company member (mint a token via issueUserToken on the VM),
+      create a channel, then `PATCH /v1/channels/:id {"name":"x"}` returns 200 with
+      the new name AND `DELETE /v1/channels/:id` returns 200 {"deleted":true}. A 403
+      on either (for the creator) => the admin-only regression is back. Built-in
+      channels (kind != 'standard') must still return 403 on both.
