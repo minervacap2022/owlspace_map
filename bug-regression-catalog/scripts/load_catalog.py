@@ -81,7 +81,9 @@ _PROJECT_MARKERS: list[tuple[str, tuple[str, ...]]] = [
              "intraday_risk", "midsession_reweight")),
     ("owl-backend", ("owl-backend",)),
     ("owl", ("Owlspace_re", "owl-agent", "apps/owlspace", "packages/owl", "/stoat/",
-             "/Owl/", "Owl/Sources", "Owl-Info")),
+             "/Owl/", "Owl/Sources", "Owl-Info",
+             # owlspace_map repo = the /no-new-bugs tooling itself (sector map, catalog, checker)
+             "owlspace_map", "sector_map", "bug-regression-catalog", "production-rules-checker")),
     ("klik", ("Klik_one", "Klik_newandroid", "klik_esp32", "klik_", "/opt/Klik",
               "KK_", "klik-", "klikone", "kk-execution", "liquid/samples/composeApp",
               "AndroidKmp", "deploy/")),

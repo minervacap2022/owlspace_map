@@ -251,6 +251,31 @@ by default.)*
 
 ---
 
+## CONCRETE FEEDBACK LOOPS — Klik (instance #1)
+
+Two professional, **hermetic** test layers exist (built 2026-06-03) — reach for these as the fast
+pass/fail signal before touching the relevant code, and *extend* them rather than re-deriving:
+
+- **Backend isolated-DB integration** — the `KK_inttest` uv package (repo `minervacap2022/Klik`)
+  stands up a throwaway `pgvector/pgvector:pg16` container, bootstraps the *authoritative* schema
+  (`docker/infra/init/00-extensions.sql` + `01-schema.sql`), and redirects the whole stack's
+  `db_manager` to it via a **guarded `KLIK_TEST_DB_URL`** override in `KK_postgresql/config.py` (a
+  conftest guard ABORTS unless it resolved to the container — these tests never touch prod). Clean
+  slate per test. Run: `bash KK_inttest/scripts/run-integration-tests.sh` (needs Docker).
+- **Frontend client wire-contracts** — `BackendAuthApiContractTest` drives the real request DTOs
+  through the real `encodeDefaults=false` Json via an injected fake transport, pinning the 403
+  landmine (`age_confirmed_over_13` / `accept_biometric_consent` must stay on the `/register` wire).
+  Runs on `iosSimulatorArm64Test` (Klik_one) and `testDebugUnitTest` (Klik_newandroid). The SAME
+  guard lives on BOTH client forks — duplication-drift is the enemy (Principle 0). Seam: an
+  injectable `BackendAuthApi` (transport + device getters, with production defaults).
+- **Unit suites** + how to run each: project memory `project_test_loops`. Catalog id for the 403
+  landmine: `BUG-2026-06-03-6f9f53`.
+- **Enforcement is LOCAL** — no GitHub CI for the new integration tests (private repos, no paid
+  plan): a **pre-push hook** runs the suite (`scripts/install-git-hooks.sh` in each repo). The
+  backend uses a hook, NOT a server systemd timer.
+
+---
+
 ## THE ANTI-REGRESSION RULES (the ones not already above)
 
 The change loop and ladder cover feedback-loop-first, confidence=coverage, no-false-green,

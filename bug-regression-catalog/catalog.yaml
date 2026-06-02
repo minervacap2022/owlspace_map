@@ -1829,3 +1829,71 @@ bugs:
       owlbot replies. channel_members.always_on = true for that (channel, agent).
       decision=false in the bot-pool log for a non-mention human message => the
       mention-only regression is back.
+
+  - id: BUG-2026-06-03-6f9f53
+    title: Klik auth 403 landmine — age_confirmed_over_13 / accept_biometric_consent dropped from the /register wire by encodeDefaults=false (both client forks)
+    date: 2026-06-03
+    surface: frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/repository/BackendAuthApi.kt
+      - Klik_newandroid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/repository/BackendAuthApi.kt
+      - Klik_one/liquid/samples/composeApp/src/commonTest/kotlin/io/github/fletchmckee/liquid/samples/app/data/repository/BackendAuthApiContractTest.kt
+    user_visible_symptom: |
+      A user who accepted the onboarding consent screens still gets a 403 on their
+      first authenticated request — "You must confirm you are 13 years of age or
+      older" (or the BIPA voiceprint-consent 403 at the KK_voiceprint stage). Root
+      cause: BackendRegisterRequest's age_confirmed_over_13 / accept_biometric_consent
+      are sent =true, but if either field is given a Kotlin default value, the app's
+      Json { encodeDefaults = false } DROPS same-as-default values from the body, so
+      the required field silently never reaches KK_auth -> server applies its false
+      default -> 403. (Klik#848.)
+    lint:
+      rule: REGISTER_AGE_CONSENT_ASSERTED_ON_WIRE
+      pattern: 'age_confirmed_over_13..:true'
+      path: Klik_one/liquid/samples/composeApp/src/commonTest/kotlin/io/github/fletchmckee/liquid/samples/app/data/repository/BackendAuthApiContractTest.kt
+      presence: required
+      message: The wire-contract test must assert age_confirmed_over_13 stays =true on the /register body (driven through the real encodeDefaults=false Json). Its ABSENCE means the 403 must-confirm-13 landmine is unguarded. The two dots absorb Kotlin's escaped quote. Companion static check lives in scripts/k1-guards.sh (age_confirmed_over_13 must have no default).
+    chaos:
+      runner: null
+    observable_signal: |
+      Run BackendAuthApiContractTest.register_carries_age_and_biometric_consent_on_the_wire
+      on either client fork (iosSimulatorArm64Test on Klik_one, testDebugUnitTest on
+      Klik_newandroid): the captured /register body must contain
+      "age_confirmed_over_13":true AND "accept_biometric_consent":true. If a request
+      DTO field gains a default value, encodeDefaults=false drops it and this assertion
+      fails => the 403 landmine is back.
+
+  - id: BUG-2026-06-03-63b3f1
+    title: sector_map py_stem resolver dropped dotted PACKAGE imports to a soft reference => empty (lying) blast radius on real Python repos
+    date: 2026-06-03
+    surface: tooling-ci
+    source_files:
+      - sector_map/extract.py
+      - sector_map/test_cli.py
+    user_visible_symptom: |
+      Running the sector map on a normal Python PACKAGE repo (dotted imports like
+      `from core.m import helper`) reported NO depends_on edges and an empty blast
+      radius — a false "nothing depends on this sector". An agent driving a pre-edit
+      check would believe a foundational change was safe when consumers actually
+      depend on it. Root cause: the py_stem import resolver did
+      `stem_map.get(p.split("/")[0])`, which matches only FLAT bare-module imports
+      (`import foo`); a package prefix like `core` is a directory, never a file stem,
+      so dotted imports fell through to a soft `references` edge instead of a hard
+      `depends_on`. The owlspace_map self-map uses flat bare-module imports, so it
+      masked the gap until a packaged-import test surfaced it.
+    lint:
+      rule: NO_PY_STEM_FIRST_COMPONENT_ONLY
+      pattern: 'stem_map\.get\(p\.split\("/"\)\[0\]\)'
+      path: sector_map/extract.py
+      presence: forbidden
+      message: sector_map py_stem must resolve dotted PACKAGE imports (flat stem, then package-root, then trailing stem), not collapse to the first-component-only lookup; a match means packaged Python repos get empty (lying) blast radii again.
+    chaos:
+      runner: null
+    observable_signal: |
+      python3 sector_map/test_cli.py — ConsumersRiskFirst.test_uncovered_consumer_is_surfaced_and_ordered_first
+      builds a 2-sector Python PACKAGE repo (api imports `from core.m import helper`)
+      and asserts `api` is in core's blast_radius. If the resolver regresses to
+      flat-only, api->core becomes a soft "references" edge, core's blast_radius is
+      empty, and the assertion fails. Equivalently: build_graph on any dotted-import
+      Python repo must emit kind "depends_on" (not "references") for a cross-sector
+      import.
