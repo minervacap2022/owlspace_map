@@ -4,33 +4,52 @@
 The agent runs this via Bash *before* an edit (pull at the freshest moment); the
 human runs it in a terminal. Each call re-reads the current repo, so it's never stale.
 
+    sectormap.py init  [--repo DIR] [--out FILE]   # initiate the map: detect sectors → write a profile
+    sectormap.py serve [--repo DIR] [--profile F]  # launch the live dashboard (http://127.0.0.1:8765)
     sectormap.py list
-    sectormap.py brief <sector>
-    sectormap.py blast-radius <sector>
-    sectormap.py consumers-tests <sector>     # the tests to run before AND after a change
+    sectormap.py brief <sector | path/to/File.kt>          # 7-dimension briefing; sector OR a file path
+    sectormap.py blast-radius <sector | path>
+    sectormap.py consumers-tests <sector | path>   # uncovered consumers first, then tests to run before/after
     sectormap.py coverage
-    sectormap.py uncovered <sector>
-  add --json for machine output.
+    sectormap.py uncovered <sector | path>
+  add --json for machine output.  --repo / --profile select the target repo (default: this one).
 """
 from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
-from extract import build_graph
+from extract import DEFAULT_REPO, build_graph, default_profile
 
 
 def _find(g, name):
     return next((s for s in g["sectors"] if s["id"] == name), None)
 
 
+def _resolve_sector(g, name):
+    """Accept a sector id OR a file path (what an agent actually holds) → sector id.
+    A path matches the sector whose files include it (full relative path or bare name)."""
+    if not name:
+        return None
+    if _find(g, name):
+        return name
+    q = name.replace("\\", "/").lstrip("./")
+    for s in g["sectors"]:
+        for f in s["dimensions"]["structure"]["files"]:
+            if f == q or f.endswith("/" + q):
+                return s["id"]
+    return None
+
+
 def brief(g, name):
-    s = _find(g, name)
+    sid = _resolve_sector(g, name)
+    s = _find(g, sid)
     if not s:
-        return {"error": f"no sector {name!r}; try: {[x['id'] for x in g['sectors']]}"}
+        return {"error": f"no sector or file {name!r}; sectors: {[x['id'] for x in g['sectors']]}"}
     d = s["dimensions"]
     return {
-        "sector": name, "kind": s["kind"], "loc": s["loc"], "files": s["file_count"],
+        "sector": sid, "kind": s["kind"], "loc": s["loc"], "files": s["file_count"],
         "1_structure": {"depends_on": d["structure"]["depends_on"],
                          "symbols": len(d["structure"]["symbols"])},
         "2_behavior": d["behavior"]["invariants"],
@@ -44,22 +63,29 @@ def brief(g, name):
 
 
 def blast_radius(g, name):
-    s = _find(g, name)
+    sid = _resolve_sector(g, name)
+    s = _find(g, sid)
     if not s:
-        return {"error": f"no sector {name!r}"}
-    return {"sector": name, "blast_radius": s["dimensions"]["change_safety"]["blast_radius"]}
+        return {"error": f"no sector or file {name!r}"}
+    return {"sector": sid, "blast_radius": s["dimensions"]["change_safety"]["blast_radius"]}
 
 
 def consumers_tests(g, name):
-    s = _find(g, name)
+    sid = _resolve_sector(g, name)
+    s = _find(g, sid)
     if not s:
-        return {"error": f"no sector {name!r}"}
+        return {"error": f"no sector or file {name!r}"}
     blast = s["dimensions"]["change_safety"]["blast_radius"]
-    run = {}
-    for c in [name, *blast]:
-        cs = _find(g, c)
-        run[c] = cs["dimensions"]["tests_coverage"]["test_files"] or ["(no tests — uncovered)"]
-    return {"sector": name, "run_before_and_after": run}
+    tests, uncovered = {}, []
+    for c in [sid, *blast]:
+        tf = _find(g, c)["dimensions"]["tests_coverage"]["test_files"]
+        tests[c] = tf or []
+        if not tf and c != sid:
+            uncovered.append(c)                  # a consumer with NO test → silent-break risk
+    # the RISK leads; the bulky per-sector test list follows.
+    return {"sector": sid, "blast_radius": blast,
+            "uncovered_consumers": uncovered,
+            "tests_to_run_before_and_after": tests}
 
 
 def coverage(g, _):
@@ -67,10 +93,26 @@ def coverage(g, _):
 
 
 def uncovered(g, name):
-    s = _find(g, name)
+    sid = _resolve_sector(g, name)
+    s = _find(g, sid)
     if not s:
-        return {"error": f"no sector {name!r}"}
-    return {"sector": name, "uncovered_surface": s["dimensions"]["tests_coverage"]["uncovered_surface"]}
+        return {"error": f"no sector or file {name!r}"}
+    return {"sector": sid, "uncovered_surface": s["dimensions"]["tests_coverage"]["uncovered_surface"]}
+
+
+def init(argv):
+    """Bootstrap the map for any repo: auto-detect top-level dirs as sectors and write
+    a starter profile you can then tune. This is how you 'initiate the map' on a new repo."""
+    repo = Path(argv[argv.index("--repo") + 1]).resolve() if "--repo" in argv else DEFAULT_REPO
+    prof = default_profile(repo)
+    out = (Path(argv[argv.index("--out") + 1]) if "--out" in argv
+           else Path(__file__).resolve().parent / "profiles" / f"{repo.name.lower().replace(' ', '-')}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(prof, indent=2))
+    return {"initiated": str(repo), "profile": str(out),
+            "sectors_detected": [s["id"] for s in prof["sectors"]],
+            "next": [f"python3 cli.py list  --repo {repo} --profile {out}",
+                     f"python3 server.py    --repo {repo} --profile {out}   # live dashboard :8765"]}
 
 
 CMDS = {
@@ -100,9 +142,18 @@ def _print_human(cmd, result):
 
 
 def main():
-    from pathlib import Path
     argv = sys.argv[1:]
     as_json = "--json" in argv
+    # actions that don't query an existing graph (init writes config; serve launches the UI)
+    if argv and argv[0] == "init":
+        result = init(argv)
+        print(json.dumps(result, indent=2)) if as_json else _print_human("init", result)
+        return
+    if argv and argv[0] == "serve":
+        import os
+        argv.remove("serve")
+        server = Path(__file__).resolve().parent / "server.py"
+        os.execv(sys.executable, [sys.executable, str(server), *argv])  # passes --repo/--profile/--port
     repo = profile = None
     if "--repo" in argv:
         repo = argv[argv.index("--repo") + 1]

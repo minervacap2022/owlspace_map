@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_REPO = Path(__file__).resolve().parent.parent
-SKIP_DIRS = {".git", "__pycache__", "node_modules", "build", "dist"}
+SKIP_DIRS = {".git", "__pycache__", "node_modules", "build", "dist", "graphify-out"}
 TEXT_SUFFIX = {".py", ".md", ".yaml", ".yml", ".sh", ".txt", ".json", ".html", ".kt"}
 GUARD_SIGNS = [
     (r"duplicate id", "id-uniqueness guard (raises on a duplicate catalog id)"),
@@ -595,7 +595,13 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
             return None
         p = imp.replace(".", "/").replace("::", "/")
         if resolve_mode == "py_stem":
-            return stem_map.get(p.split("/")[0])
+            parts = p.split("/")
+            if parts[0] in stem_map:               # flat module: import name == a file stem
+                return stem_map[parts[0]]
+            for sid, root in roots:                # packaged import a.b.c → a leading component is the sector dir
+                if p == root or p.startswith(root + "/"):
+                    return sid
+            return stem_map.get(parts[-1])         # last-ditch: the trailing module's file stem
         if prefix_norm and p.startswith(prefix_norm):
             p = p[len(prefix_norm):].lstrip("/")
         for sid, root in roots:
