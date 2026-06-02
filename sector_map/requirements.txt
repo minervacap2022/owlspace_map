@@ -20,3 +20,9 @@ coverage>=7.0
 # Point the profile at it: {"scip_index": "index.scip", "scip_root": "."}. The map
 # auto-detects index.scip at the repo root; without one it uses the name-level heuristic.
 # Output carries "call_resolution": "scip (type-precise)" | "heuristic (name-level)".
+#
+# graphify (OPTIONAL native provider) — a richer tree-sitter call graph with
+# EXTRACTED/INFERRED/AMBIGUOUS confidence (MIT). Imported as a library by
+# graphify_ingest.py and enabled per profile with {"call_graph": "graphify"};
+# the engine degrades gracefully if it's absent, so install only to use it:
+#   pip install graphifyy

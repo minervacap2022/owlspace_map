@@ -166,6 +166,24 @@ class Coverage(unittest.TestCase):
                         f"def g (line 3, 0 hits) should be uncovered: {tc['uncovered_surface']}")
 
 
+class Graphify(unittest.TestCase):
+    def test_native_graphify_provider_resolves_a_call(self):
+        import graphify_ingest
+        if not graphify_ingest.available():
+            self.skipTest("graphify (graphifyy) not installed")
+        d = _write({"a/x.py": "def helper():\n    return 1\ndef run():\n    return helper()"})
+        prof = _prof("py", "", ["a"])
+        prof["resolve"] = "py_stem"
+        prof["call_graph"] = "graphify"
+        g = extract.build_graph(d, prof)
+        self.assertEqual(g["call_resolution"], "graphify (tree-sitter, confidence-tagged)")
+        by = {s["id"]: s for s in g["symbols"]}
+        names = {s["name"] for s in g["symbols"]}
+        self.assertIn("helper", names)
+        run = next(s for s in g["symbols"] if s["name"] == "run")
+        self.assertIn("helper", {by[o]["name"] for o in run["out"]}, "graphify should resolve run → helper")
+
+
 class SelfMap(unittest.TestCase):
     def test_owlspace_self_map_invariants(self):
         g = extract.build_graph()  # no profile → maps owlspace_map itself

@@ -539,25 +539,35 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         raw[s["id"]] = dict(files=files, code=code, symbols=symbols, imps=imps, fimps=fimps,
                             loc=sum(_loc(f) for f in files), tfiles=tfiles, tcount=tcount, dir=d)
 
-    # drill-down: per-symbol nodes + the call graph. A SCIP index (scip-python /
-    # scip-kotlin / scip-typescript) gives TYPE-PRECISE calls (globally-unique
-    # symbols, type-checker-resolved); without one we fall back to the name-level
-    # heuristic. Either way the output shape is identical — labeled honestly.
+    # drill-down: per-symbol nodes + the call graph. Three NATIVE providers, in
+    # order of precision: a SCIP index (type-precise) > graphify (tree-sitter +
+    # confidence) > the name-level heuristic. All emit the same shape, labeled.
+    _f2s = {str(f.relative_to(repo)): sid for sid, r in raw.items() for f in r["code"]}
+
+    def _fsec(rel):
+        if rel in _f2s:
+            return _f2s[rel]
+        for k, v in _f2s.items():
+            if k.endswith("/" + rel) or rel.endswith("/" + k):
+                return v
+        return None
+
     scip_path = (repo / prof["scip_index"]) if prof.get("scip_index") else None
     if scip_path and scip_path.exists():
         import scip_ingest
-        _f2s = {str(f.relative_to(repo)): sid for sid, r in raw.items() for f in r["code"]}
-
-        def _fsec(rel):
-            if rel in _f2s:
-                return _f2s[rel]
-            for k, v in _f2s.items():
-                if k.endswith("/" + rel) or rel.endswith("/" + k):
-                    return v
-            return None
         syms, call_edges, sector_calls = scip_ingest.precise_call_graph(
             scip_path, repo, prof.get("scip_root", "."), _fsec)
         call_resolution = "scip (type-precise)"
+    elif prof.get("call_graph") == "graphify":
+        import graphify_ingest
+        all_code = [f for r in raw.values() for f in r["code"]]
+        res = graphify_ingest.graphify_graph(all_code, repo, _fsec)
+        if res:
+            syms, call_edges, sector_calls = res
+            call_resolution = "graphify (tree-sitter, confidence-tagged)"
+        else:
+            syms, call_edges, sector_calls = _symbol_graph(raw, repo)
+            call_resolution = "heuristic (graphify unavailable)"
     else:
         syms, call_edges, sector_calls = _symbol_graph(raw, repo)
         call_resolution = "heuristic (name-level)"
