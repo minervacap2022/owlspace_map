@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -57,6 +58,45 @@ def _loc(path: Path) -> int:
         return 0
 
 
+def _is_test_file(f: Path) -> bool:
+    """Language-aware test-file detection (so non-Python/Kotlin repos aren't
+    falsely reported uncovered)."""
+    n, p = f.name, str(f)
+    if f.suffix == ".py":
+        return n.startswith("test_") or n.endswith("_test.py")
+    if f.suffix == ".go":
+        return n.endswith("_test.go")
+    if f.suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs"):
+        return ".test." in n or ".spec." in n or "__tests__" in p
+    if f.suffix == ".java":
+        return n.endswith("Test.java") or "/test/" in p
+    if f.suffix == ".rb":
+        return n.endswith("_test.rb") or n.endswith("_spec.rb")
+    return False
+
+
+def _count_tests(f: Path) -> int:
+    try:
+        txt = f.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return 0
+    if f.suffix == ".py":
+        try:
+            return sum(1 for n in ast.walk(ast.parse(txt))
+                       if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
+        except SyntaxError:
+            return 0
+    if f.suffix == ".go":
+        return len(re.findall(r"func\s+Test\w+", txt))
+    if f.suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs"):
+        return len(re.findall(r"\b(?:it|test)\s*\(", txt))
+    if f.suffix == ".java":
+        return len(re.findall(r"@Test", txt))
+    if f.suffix == ".rs":
+        return len(re.findall(r"#\[test\]", txt))
+    return 1
+
+
 # ── universal parsing via tree-sitter (all languages, one dependency) ─────────
 # suffix → (grammar, {top-level definition node types})
 LANGS = {
@@ -81,7 +121,7 @@ LANGS = {
     ".php": ("php", {"function_definition", "class_declaration", "interface_declaration"}),
 }
 _IMPORT_TYPES = {"import_statement", "import_from_statement", "import_declaration",
-                 "import_header", "import_spec", "use_declaration"}
+                 "import_header", "import_spec", "use_declaration", "preproc_include"}
 _parsers: dict = {}
 
 
@@ -179,6 +219,9 @@ def _import_path(node, lang: str):
         return txt.replace("import", "", 1).replace("static", "", 1).strip().rstrip(";").strip()
     if lang == "swift":
         return txt.replace("import", "", 1).strip()
+    if lang in ("c", "cpp"):  # #include "foo.h" / <foo.h>
+        m = re.search(r'[<"]([^>"]+)[>"]', txt)
+        return m.group(1) if m else None
     return None
 
 
@@ -413,10 +456,12 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         d = src_base / s["root"]
         files = _walk(d)
         code = [f for f in files if f.suffix in LANGS]
-        symbols, imps = [], []
+        symbols, imps, fimps = [], [], []
         for f in code:
             symbols += _symbols(f)
-            imps += _imports(f)
+            fis = _imports(f)
+            imps += fis
+            fimps += [(str(f.relative_to(repo)), imp) for imp in fis]
         # tests (conventions are language-specific → profile-driven)
         tfiles, tcount = [], 0
         if is_kt and test_base:
@@ -425,15 +470,10 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
             tfiles = [str(f.relative_to(repo)) for f in tks]
             tcount = sum(len(re.findall(r"@Test", f.read_text(encoding="utf-8", errors="ignore"))) for f in tks)
         else:
-            tks = [f for f in files if f.name.startswith("test_") and f.suffix == ".py"]
+            tks = [f for f in files if _is_test_file(f)]
             tfiles = [str(f.relative_to(repo)) for f in tks]
-            for t in tks:
-                try:
-                    tcount += sum(1 for n in ast.walk(ast.parse(t.read_text(errors="ignore")))
-                                  if isinstance(n, ast.FunctionDef) and n.name.startswith("test"))
-                except (SyntaxError, OSError):
-                    pass
-        raw[s["id"]] = dict(files=files, code=code, symbols=symbols, imps=imps,
+            tcount = sum(_count_tests(t) for t in tks)
+        raw[s["id"]] = dict(files=files, code=code, symbols=symbols, imps=imps, fimps=fimps,
                             loc=sum(_loc(f) for f in files), tfiles=tfiles, tcount=tcount, dir=d)
 
     # drill-down: per-symbol nodes + the name-resolved call graph
@@ -445,8 +485,21 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     # import → sector resolution (universal): flat-module stem, or package prefix.
     stem_map = {f.stem: sid for sid, r in raw.items() for f in r["code"]}
     roots = sorted(((s["id"], s["root"]) for s in prof["sectors"]), key=lambda x: -len(x[1]))
+    # path (minus extension) → sector, for resolving relative imports / local includes
+    file_index = {re.sub(r"\.\w+$", "", str(f.relative_to(repo))): sid
+                  for sid, r in raw.items() for f in r["code"]}
+    _REL_SUFFIX = {".c", ".h", ".cc", ".cpp", ".hpp"}
 
-    def resolve(imp: str) -> str | None:
+    def resolve(imp: str, from_file: str | None = None) -> str | None:
+        # JS/TS relative imports (./ ../) and C/C++ local includes resolve against
+        # the importing file's directory → a target file → its sector.
+        if from_file and (imp.startswith(".") or Path(from_file).suffix in _REL_SUFFIX):
+            target = os.path.normpath(os.path.join(os.path.dirname(from_file), imp)).replace("\\", "/")
+            cand = re.sub(r"\.\w+$", "", target)
+            for key in (cand, cand + "/index", target):
+                if key in file_index:
+                    return file_index[key]
+            return None
         p = imp.replace(".", "/").replace("::", "/")
         if resolve_mode == "py_stem":
             return stem_map.get(p.split("/")[0])
@@ -459,8 +512,8 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
 
     hard: dict[tuple[str, str], int] = {}
     for sid, r in raw.items():
-        for imp in r["imps"]:
-            b = resolve(imp)
+        for frel, imp in r["fimps"]:
+            b = resolve(imp, frel)
             if b and b != sid:
                 hard[(sid, b)] = hard.get((sid, b), 0) + 1
 

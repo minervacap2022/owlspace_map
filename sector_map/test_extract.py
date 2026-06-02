@@ -96,6 +96,37 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(cyc["b"], ["a"])
 
 
+def _prof(lang, prefix, sectors):
+    return {"label": lang, "lang": lang, "git_root": ".", "src_base": "", "test_base": "",
+            "import_prefix": prefix, "resolve": "kt_pkg", "catalog_project": None,
+            "deploy_symlinks": False, "behavior": [], "boundaries_global": [],
+            "boundaries_by_sector": {}, "sectors": [{"id": s, "root": s} for s in sectors]}
+
+
+def _dep_edges(g):
+    return {(e["src"], e["dst"]) for e in g["edges"] if e["kind"] == "depends_on"}
+
+
+class MultiLangEdges(unittest.TestCase):
+    def test_ts_relative_imports_resolve(self):
+        d = _write({"core/t.ts": "export class T{}",
+                    "ui/v.ts": 'import {T} from "../core/t"; export function v(){}'})
+        self.assertIn(("ui", "core"), _dep_edges(extract.build_graph(d, _prof("ts", "", ["core", "ui"]))))
+
+    def test_c_include_resolves(self):
+        d = _write({"core/core.h": "int f();",
+                    "app/main.c": '#include "../core/core.h"\nint main(){ return f(); }'})
+        self.assertIn(("app", "core"), _dep_edges(extract.build_graph(d, _prof("c", "", ["core", "app"]))))
+
+    def test_per_language_test_detection(self):
+        d = _write({"pkg/m.go": "package pkg\nfunc F(){}",
+                    "pkg/m_test.go": "package pkg\nimport \"testing\"\nfunc TestF(t *testing.T){}"})
+        g = extract.build_graph(d, _prof("go", "", ["pkg"]))
+        cov = g["sectors"][0]["dimensions"]["tests_coverage"]
+        self.assertTrue(cov["covered"], "Go *_test.go should count as covered")
+        self.assertEqual(cov["test_count"], 1)
+
+
 class SelfMap(unittest.TestCase):
     def test_owlspace_self_map_invariants(self):
         g = extract.build_graph()  # no profile → maps owlspace_map itself
