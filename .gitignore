@@ -6,3 +6,4 @@ coverage.xml
 /index.scip
 *.scip
 !sector_map/tests_data/*.scip
+graphify-out/
