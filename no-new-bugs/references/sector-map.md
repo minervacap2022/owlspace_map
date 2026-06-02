@@ -13,7 +13,7 @@ project (service-level, package-level, or feature-level).
 1. **Structure** *(parseable)* — responsibilities, schema, file tree, dependencies.
 2. **Behavior** — invariants, runtime data + edge cases, concurrency, failure modes.
 3. **Context** — env/config, deploy-state-vs-source, resource ownership, infra/routing.
-4. **Boundaries** — parallel impls that must stay in sync (forks, client↔server, platforms) + external systems.
+4. **Boundaries** — parallel impls that must stay in sync (client↔server, platform actuals) + external systems.
 5. **Intent & History** — the *why*/ADR, past bugs + why fixes failed, non-code constraints.
 6. **Change-safety** — blast radius, observability.
 7. **Tests & Coverage** — covering tests (own + consumers'), coverage + pass/fail, the **uncovered surface** of a change.
@@ -44,7 +44,7 @@ other six** — which is why no off-the-shelf code-graph tool (it draws only #1)
 ```
 Nodes:  Sector · File · Symbol · Schema · Contract · Test · ExternalSystem · Resource
 Edges:  CONTAINS · IMPORTS/CALLS · DEFINES · TESTS · COVERS · DEPENDS_ON · IMPLEMENTS/CONSUMES
-        · MIRRORS(cross-repo) · TALKS_TO(external) · OWNS(resource)
+        · TALKS_TO(external) · OWNS(resource)
 ```
 Keystone queries: `blast_radius(symbol)` (who's affected) · `consumers_tests(sector)` (own + dependents' covering tests) · `uncovered_surface(change)` (symbols a change touches that no test exercises).
 

@@ -40,7 +40,7 @@ To change a sector without breaking something, you must know:
 | 1 | **Structure** — responsibilities, schema, file tree, dependencies | the code (parseable) | — (the visible half) |
 | 2 | **Behavior** — invariants, real runtime data/edge-cases, concurrency, failure modes | runtime + people's heads | a serialization-default dropped a required field → 403 |
 | 3 | **Context** — env/config, deploy-state-vs-git, resource ownership, infra/routing | the service manager, the reverse proxy, the server | a bare-env launcher crash-loop |
-| 4 | **Boundaries** — forks/parallel impls that must sync, external systems | tribal knowledge | the two-fork drift; an unpowered hardware rail |
+| 4 | **Boundaries** — parallel impls that must sync (client↔server DTOs), external systems | tribal knowledge | a client↔server DTO mismatch; an unpowered hardware rail |
 | 5 | **Intent & History** — the *why*, past bugs + why fixes failed, constraints (privacy law, isolation) | ADRs, git, a catalog | re-introduced already-fixed bugs |
 | 6 | **Change-safety** — true blast radius, observability (how you'd know it broke in prod) | nowhere | the missing/lying feedback loop |
 | 7 | **Tests & Coverage** — does this sector have unit tests, what they cover, pass/fail, **which tests cover a change (own + consumers')**, and the **uncovered surface** you're about to touch | test files + coverage reports + CI results (rarely mapped to sectors) | a change to an **untested path** shipped silently (a low-coverage area) |
@@ -96,7 +96,7 @@ Sentinel is three layers, not one tool:
 ```
 Nodes:  Sector · File · Symbol · Schema · Contract · Test · ExternalSystem · Resource(port/file/singleton)
 Edges:  CONTAINS · IMPORTS/CALLS · DEFINES · TESTS · COVERS · DEPENDS_ON · IMPLEMENTS/CONSUMES
-        · MIRRORS(cross-repo) · TALKS_TO(external) · OWNS(resource)
+        · TALKS_TO(external) · OWNS(resource)
 ```
 `TESTS`/`COVERS` edges (test → the symbols it exercises) power dimension #7. The invisible dimensions attach to this backbone (see FR-M6, FR-M11).
 
@@ -117,7 +117,7 @@ Edges:  CONTAINS · IMPORTS/CALLS · DEFINES · TESTS · COVERS · DEPENDS_ON ·
 - **US2 (context)** — *As a dev*, I see a sector go **red (deploy-state ≠ git / unhealthy)** on the dashboard the moment it happens, before I build on top of it.
 - **US3 (intent & history)** — *As a dev*, I see this sector previously had a serialization-default 403 bug, with the guard that now prevents it, so I don't re-open it.
 - **US4 (agent loop)** — *As the agent*, before my `Edit` on a sector, I run the CLI, receive its **seven-dimension brief + blast radius + covering tests**, and run those tests automatically.
-- **US5 (boundaries)** — *As the agent*, I'm warned this sector has a **twin in the other repo** that must stay in sync, so I port the change to the right layer.
+- **US5 (boundaries)** — *As the agent*, I'm warned this sector has a **parallel implementation** (its client↔server counterpart / `expect`-`actual` pair) that must stay in sync, so I change both.
 - **US6 (tests & coverage)** — *As either*, the dashboard shows this sector at **X% coverage**, the exact tests covering the line I'm about to change, and a **red "uncovered" badge** if the path I'm touching has no test — so I write one *first*.
 - **US7 (recurrence)** — *As either*, when a new bug class appears, it becomes a **new gate + catalog entry**, so it can't silently return.
 
@@ -131,11 +131,10 @@ Edges:  CONTAINS · IMPORTS/CALLS · DEFINES · TESTS · COVERS · DEPENDS_ON ·
 - **FR-M3 — Blast-radius query**: given a symbol/sector, return everything that depends on it (transitively) = the real change surface.
 - **FR-M4 — Consumers'-tests query** *(keystone)*: the tests — own **and dependents'** — that cover a given change.
 - **FR-M5 — Schema extraction** from typed DTOs / Pydantic / SQL DDL.
-- **FR-M6 — Anchor the invisible dimensions**: Context (deploy-state + health overlay, `OWNS(port)` edges), Boundaries (`MIRRORS` fork-drift, `TALKS_TO` externals), Intent & History (links to ADR/`CONTEXT.md`/catalog/`git log`), Behavior (guard/lint links on schema & contract nodes), Change-safety (blast-radius + observable-signal flags).
+- **FR-M6 — Anchor the invisible dimensions**: Context (deploy-state + health overlay, `OWNS(port)` edges), Boundaries (`TALKS_TO` externals + contract-diff on shared DTOs), Intent & History (links to ADR/`CONTEXT.md`/catalog/`git log`), Behavior (guard/lint links on schema & contract nodes), Change-safety (blast-radius + observable-signal flags).
 - **FR-M7 — Real-time freshness (the engine)**: a background **watcher daemon** (file-watch + commit hook + coverage/CI ingest) re-extracts changed files and upserts the graph within seconds. This is the single source of "real-time"; every surface reads this always-current graph.
 - **FR-M8 — Agent surface = CLI**: a CLI the agent runs via Bash and the human runs in a terminal (`sectormap brief / blast-radius / consumers-tests / coverage <sector>`, `--json`), reading the current graph each call. **CLI is the decided surface; MCP is not planned for v1.**
 - **FR-M9 — Human surface = LIVE dashboard (MUST)**: a dashboard that **pushes** changes to the browser (websocket/SSE) and re-renders the affected sector **live, without a manual refresh**, within seconds of a code / deploy-state / test-result change. A React-Flow (or equivalent) card-per-sector view of all seven dimensions, with the Context overlay (green/red) **and the Tests panel** updating in real time.
-- **FR-M10 — Span multiple repos** (e.g. a frontend repo + a backend repo) in one map.
 - **FR-M11 — Tests & Coverage dimension (MUST)**: for every sector, surface (a) its unit-test inventory, (b) **coverage %** and pass/fail (ingested from coverage reports and the latest CI/test run), (c) the **test→target mapping** (`TESTS`/`COVERS` edges), and (d) the **uncovered surface** of a pending change (the symbols a change touches that no test exercises). Available on both the CLI and the live dashboard; the dashboard MUST render a per-sector **Tests panel** (coverage, pass/fail, covering tests own + consumers', uncovered badge).
 
 ### The Gates (FR-G) — *often largely exist; integrate them*
@@ -192,7 +191,6 @@ Edges:  CONTAINS · IMPORTS/CALLS · DEFINES · TESTS · COVERS · DEPENDS_ON ·
 - **Two background processes**: the **watcher** (graph + coverage freshness) and the **dashboard server** (browser push). Both small and local; neither is MCP.
 - **Coverage source**: dimension #7 depends on the repos emitting coverage and CI publishing test results; where absent, the sector shows "coverage unknown" (honest, per NFR5) — and that's itself a useful signal.
 - **GitNexus** is the closest off-the-shelf fit but is **PolyForm Noncommercial** → **blocked** for commercial use. **graphify** (MIT) is viable for a quick structural v0.
-- **Multiple repos**: a separate backend repo may not be in the frontend checkout — the map must index both.
 - **Risk — cross-language precision**: language indexers pin to specific compiler majors and have monorepo/source-set friction; v1 edges may be import-level + heuristic (acceptable for ~80% of blast-radius, but must be labeled — NFR5).
 
 ---

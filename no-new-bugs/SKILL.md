@@ -83,8 +83,9 @@ Proof, in generic shapes you will recognize:
 - **Duplication-drift →** a leftover service unit ran the *same* process on the *same*
   port as its replacement; the two fought over the port AND double-fired the work. Two
   copies of one fact.
-- **Drift at repo scope →** two sibling forks of a client (e.g. iOS + Android) are not
-  1:1 mirrors; every shared invariant must be enforced in **both** or it drifts.
+- **Drift across parallel implementations →** a client↔server contract (a DTO) defined
+  twice, once on each side, silently diverges; one shared, typed schema removes the
+  second copy so a breaking change fails loud instead of drifting.
 
 ---
 
@@ -126,14 +127,15 @@ can't see:**
   deploy state vs. git; resource ownership (ports/files/singletons); infra/routing config.
   → a bare-env launcher; a server running the wrong branch; a duplicate service unit; an
   nginx longest-prefix `location` regex preempting the route you expected.
-- **Boundaries** — parallel implementations that must stay in sync (forks, client↔server
-  DTOs, iOS↔Android) and external-system contracts + their failure modes (DB, hardware,
-  an email/SMS provider). → the two-fork drift; an unpowered hardware rail returning garbage.
+- **Boundaries** — parallel implementations that must stay in sync (client↔server DTOs,
+  a platform's `expect`/`actual` pair) and external-system contracts + their failure modes
+  (DB, hardware, an email/SMS provider). → a client↔server DTO mismatch; an unpowered
+  hardware rail returning garbage.
 - **Intent & History** — the *why* / ADR, past bugs here + why prior fixes failed (the
   catalog, `git log`), non-code constraints (privacy law e.g. BIPA/COPPA-13, per-user
   data isolation, perf SLAs, the production rules), and the spec's "done". → a re-introduced
   fixed bug; a compliance fix that must not be undone.
-- **Change-safety** — true blast radius (runtime paths + cross-repo consumers + migrations),
+- **Change-safety** — true blast radius (runtime paths + consumers + migrations),
   observability (how you'd KNOW it broke in prod).
 - **Tests & Coverage** — which tests cover this (own + consumers'), coverage % + pass/fail,
   and especially the **uncovered surface** you're about to touch. A parser sees test *files*;
