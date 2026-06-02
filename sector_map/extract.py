@@ -51,7 +51,8 @@ def _walk(d: Path) -> list[Path]:
 
 def _loc(path: Path) -> int:
     try:
-        return sum(1 for _ in path.open("r", encoding="utf-8", errors="ignore"))
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            return sum(1 for _ in fh)
     except OSError:
         return 0
 
@@ -94,18 +95,32 @@ def _get_parser(lang: str):
     return _parsers[lang]
 
 
+_tree_cache: dict = {}  # path -> (mtime, (grammar, root_node, def_types))
+
+
 def _tree(path: Path):
-    """(grammar, root_node, def_types) or None if unsupported/unparseable."""
+    """(grammar, root_node, def_types) or None. Cached by path+mtime so a file is
+    parsed once per build (symbols/imports/calls share it) AND skipped across builds
+    when unchanged — this is what keeps the live server cheap on large repos."""
     spec = LANGS.get(path.suffix)
     if not spec:
         return None
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    cached = _tree_cache.get(str(path))
+    if cached and cached[0] == mtime:
+        return cached[1]
     parser = _get_parser(spec[0])
     if parser is None:
         return None
     try:
-        return spec[0], parser.parse(path.read_bytes()).root_node, spec[1]
+        result = (spec[0], parser.parse(path.read_bytes()).root_node, spec[1])
     except OSError:
         return None
+    _tree_cache[str(path)] = (mtime, result)
+    return result
 
 
 def _node_name(n):
@@ -217,6 +232,101 @@ def _fallback_imports(path: Path) -> list[str]:
     return []
 
 
+# ── drill-down: per-symbol definitions + a name-resolved call graph ───────────
+_FUNC_TYPES = {"function_definition", "function_declaration", "function_item",
+               "method_declaration", "method", "method_definition", "constructor_declaration"}
+_CALL_TYPES = {"call", "call_expression", "method_invocation", "macro_invocation"}
+
+
+def _callee(node) -> str | None:
+    """The bare name of the function/method being called (last identifier segment).
+    Name-level (no overload/type resolution) — labeled heuristic, ADR's ~80% tier."""
+    fn = node.child_by_field_name("function") or node.child_by_field_name("name")
+    if fn is None and node.children:
+        fn = node.children[0]
+    if fn is None:
+        return None
+    seg = re.split(r"[.:?!]+", fn.text.decode("utf-8", "ignore").strip())[-1]
+    seg = seg.split("(")[0].split("<")[0].split("{")[0].strip()
+    return seg if seg.isidentifier() else None
+
+
+def _defs_calls(path: Path):
+    """(defs, calls): defs=[(name, kind, line)] (top-level + nested);
+    calls=[(enclosing_function_name | None, callee_name)] within each body."""
+    t = _tree(path)
+    if not t:
+        return [], []
+    _, root, def_types = t
+    types = def_types | _FUNC_TYPES
+    defs, calls = [], []
+
+    def walk(n, enclosing):
+        cur = enclosing
+        if n.type in types:
+            nm = _node_name(n)
+            if nm:
+                defs.append((nm, n.type, n.start_point[0] + 1))
+                if n.type in _FUNC_TYPES:
+                    cur = nm
+        if n.type in _CALL_TYPES:
+            cn = _callee(n)
+            if cn:
+                calls.append((enclosing, cn))
+        for c in n.children:
+            walk(c, cur)
+
+    walk(root, None)
+    return defs, calls
+
+
+def _symbol_graph(raw: dict, repo: Path):
+    """Build symbol nodes + a name-resolved call graph from the gathered code.
+    Resolution prefers same-file → same-sector → global (capped); heuristic by
+    construction (no type/overload resolution), so it's labeled, not implied exact."""
+    syms: dict[str, dict] = {}
+    name_index: dict[str, list[str]] = {}
+    file_defs: dict[tuple, list[str]] = {}
+    calls_raw = []
+    for sid, r in raw.items():
+        for f in r["code"]:
+            rel = str(f.relative_to(repo))
+            defs, calls = _defs_calls(f)
+            for nm, kind, line in defs:
+                symid = f"{sid}::{rel}::{nm}:{line}"
+                syms[symid] = {"id": symid, "name": nm, "kind": kind, "sector": sid,
+                               "file": rel, "line": line, "out": set(), "inc": 0}
+                name_index.setdefault(nm, []).append(symid)
+                file_defs.setdefault((sid, rel), []).append(symid)
+            for enc, callee in calls:
+                calls_raw.append((sid, rel, enc, callee))
+
+    call_edges = []
+    for sid, rel, enc, callee in calls_raw:
+        caller = next((cid for cid in file_defs.get((sid, rel), []) if syms[cid]["name"] == enc), None)
+        targets = name_index.get(callee, [])
+        if not targets:
+            continue
+        same_file = [t for t in targets if syms[t]["file"] == rel and t != caller]
+        same_sec = [t for t in targets if syms[t]["sector"] == sid and t != caller]
+        chosen = (same_file or same_sec or [t for t in targets if t != caller])[:3]
+        for tgt in chosen:
+            call_edges.append({"src": caller, "dst": tgt, "callee": callee})
+            syms[tgt]["inc"] += 1
+            if caller:
+                syms[caller]["out"].add(tgt)
+
+    sector_calls: dict[tuple, int] = {}
+    for e in call_edges:
+        src_sec = syms[e["src"]]["sector"] if e["src"] else None
+        dst_sec = syms[e["dst"]]["sector"]
+        if src_sec and src_sec != dst_sec:
+            sector_calls[(src_sec, dst_sec)] = sector_calls.get((src_sec, dst_sec), 0) + 1
+    for s in syms.values():
+        s["out"] = sorted(s["out"])
+    return syms, call_edges, sector_calls
+
+
 def _git(root: Path, args: list[str]) -> str:
     try:
         return subprocess.run(["git", *args], cwd=root, capture_output=True,
@@ -325,6 +435,12 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                     pass
         raw[s["id"]] = dict(files=files, code=code, symbols=symbols, imps=imps,
                             loc=sum(_loc(f) for f in files), tfiles=tfiles, tcount=tcount, dir=d)
+
+    # drill-down: per-symbol nodes + the name-resolved call graph
+    syms, call_edges, sector_calls = _symbol_graph(raw, repo)
+    sector_syms: dict[str, list] = {}
+    for s in syms.values():
+        sector_syms.setdefault(s["sector"], []).append(s)
 
     # import → sector resolution (universal): flat-module stem, or package prefix.
     stem_map = {f.stem: sid for sid, r in raw.items() for f in r["code"]}
@@ -441,6 +557,10 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
             "dimensions": {
                 "structure": {"files": sorted(str(f.relative_to(repo)) for f in r["files"])[:60],
                               "loc": r["loc"], "symbols": sorted(set(r["symbols"]))[:40],
+                              "symbol_count": len(sector_syms.get(sid, [])),
+                              "hot_symbols": [{"name": x["name"], "file": x["file"], "line": x["line"],
+                                               "in": x["inc"], "out": len(x["out"])}
+                                              for x in sorted(sector_syms.get(sid, []), key=lambda z: -z["inc"])[:8]],
                               "depends_on": deps},
                 "behavior": {"invariants": invariants},
                 "context": {"deploy": deploy, "deps": deps_used},
@@ -449,6 +569,7 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                                    "past_incidents": sector_incidents},
                 "change_safety": {"blast_radius": blast, "blast_count": len(blast),
                                   "cycles": cyc,
+                                  "called_by_sectors": sorted({a for (a, b) in sector_calls if b == sid}),
                                   "observability": ("unit tests + guards" if covered
                                                     else "guards only" if invariants else "none")},
                 "tests_coverage": {"test_files": r["tfiles"], "test_count": r["tcount"],
@@ -457,9 +578,16 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
             },
         })
 
+    # symbol nodes + call edges (drill-down). `out` holds resolved callee ids, so
+    # the dashboard draws the call graph from these; sector_calls is the aggregate.
+    symbols_out = [{"id": x["id"], "name": x["name"], "sector": x["sector"], "file": x["file"],
+                    "line": x["line"], "kind": x["kind"], "inc": x["inc"], "out": x["out"]}
+                   for x in syms.values()]
     return {"repo": prof.get("label", repo.name), "repo_path": str(repo),
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "remote": remote, "sectors": sectors_meta, "edges": edges}
+            "remote": remote, "sectors": sectors_meta, "edges": edges,
+            "symbols": symbols_out,
+            "sector_calls": [{"src": a, "dst": b, "weight": w} for (a, b), w in sector_calls.items()]}
 
 
 def _from_args():

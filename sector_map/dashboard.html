@@ -77,6 +77,20 @@
   details summary{cursor:pointer;color:var(--mut);font-size:12px}
   code{background:#0b0f14;border:1px solid var(--line2);border-radius:4px;padding:0 4px;color:#c9d1d9}
   .mono{color:var(--dim);font-size:11.5px}
+  a.drill{color:var(--blue);cursor:pointer;font-size:11px;border:1px solid var(--line2);border-radius:5px;padding:0 6px}
+  a.drill:hover{background:var(--chip)}
+  .modal{position:fixed;inset:0;background:#0009;display:flex;align-items:center;justify-content:center;z-index:30}
+  .modal.hidden{display:none}
+  .modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(1180px,95vw);height:min(820px,92vh);display:flex;flex-direction:column;overflow:hidden}
+  .modal .mhd{padding:12px 16px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .modal .mhd b{font-size:15px}
+  .modal .x{margin-left:auto;cursor:pointer;color:var(--mut);border:1px solid var(--line2);border-radius:6px;padding:2px 9px}
+  .modal .x:hover{color:var(--ink)}
+  #drill-svg{flex:1;background:radial-gradient(circle at 50% 45%,#11171f,#0d1117 75%)}
+  .symnode text{fill:var(--ink);font-size:9.5px;pointer-events:none}
+  .symnode circle{cursor:pointer}
+  .celledge{stroke:#39424f;fill:none;opacity:.55}
+  .celledge.cross{stroke:var(--purple);opacity:.6;stroke-dasharray:2 3}
 </style>
 </head>
 <body>
@@ -128,6 +142,11 @@
   <div class="cards" id="cards"></div>
 </div>
 
+<div class="modal hidden" id="drill" onclick="if(event.target.id==='drill')closeDrill()"><div class="box">
+  <div class="mhd"><b id="drill-title">⤢ call graph</b><span class="meta" id="drill-meta"></span><span class="x" onclick="closeDrill()">✕ close</span></div>
+  <svg id="drill-svg" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"><g id="dedges"></g><g id="dnodes"></g></svg>
+</div></div>
+
 <script>
 const DIMS = [
   ["1","structure"],["2","behavior"],["3","context"],["4","boundaries"],
@@ -177,7 +196,7 @@ function renderGraph(g){
       `<text text-anchor="middle" y="-${r+8}">${esc(s.id)}</text>`+
       `<text text-anchor="middle" class="sub" y="-${r-4}">blast ${blast}</text>`;
     grp.onmouseenter=()=>hot(s.id);grp.onmouseleave=()=>unhot();
-    grp.onclick=()=>{const c=document.getElementById("card-"+s.id);c.scrollIntoView({behavior:"smooth",block:"center"});c.classList.remove("flash");void c.offsetWidth;c.classList.add("flash");};
+    grp.onclick=()=>openDrill(s.id);
     Nd.appendChild(grp);
   });
 }
@@ -217,9 +236,9 @@ function keystone(id){
 
 function dval(name,d){
   const D=d.dimensions;
-  if(name==="structure")return `<div class="li"><span class="muted">loc</span> ${D.structure.loc} · <span class="muted">files</span> ${d.file_count} · <span class="muted">symbols</span> ${D.structure.symbols.length}</div>`+
-    `<div class="li"><span class="muted">depends on</span> ${chips(D.structure.depends_on,"")}</div>`+
-    (D.structure.symbols.length?`<details><summary>${D.structure.symbols.length} public symbols</summary><div class="mono">${D.structure.symbols.map(esc).join("<br>")}</div></details>`:"");
+  if(name==="structure"){const st=D.structure;return `<div class="li"><span class="muted">loc</span> ${st.loc} · <span class="muted">files</span> ${d.file_count} · <span class="muted">symbols</span> ${st.symbol_count||st.symbols.length} <a class="drill" onclick="openDrill('${d.id}')">⤢ call graph</a></div>`+
+    `<div class="li"><span class="muted">depends on</span> ${chips(st.depends_on,"")}</div>`+
+    (st.hot_symbols&&st.hot_symbols.length?`<div class="li"><span class="muted">hot symbols</span> ${st.hot_symbols.map(h=>`<span class="chip" title="${esc(h.file)}:${h.line}">${esc(h.name)} <span class="mut">·${h.in}</span></span>`).join("")}</div>`:"");}
   if(name==="behavior")return D.behavior.invariants.length?D.behavior.invariants.map(i=>`<div class="li">✓ ${esc(i)}</div>`).join(""):`<span class="muted">no enforced invariants (docs)</span>`;
   if(name==="context")return `<div class="li"><span class="muted">deploy</span> ${chips(D.context.deploy.map(x=>x.split(" → ")[0].replace(/^.*\/.claude/,"~/.claude").replace(/^.*\/.git-hooks/,"~/.git-hooks")))}</div>`+
     `<div class="li"><span class="muted">deps</span> ${chips(D.context.deps)}</div>`;
@@ -227,7 +246,8 @@ function dval(name,d){
     (D.boundaries.cross_project.length?`<div class="li"><span class="muted">cross-project</span> ${chips(D.boundaries.cross_project)}</div>`:"");
   if(name==="intent & history")return `<div class="li"><span class="muted">${D.intent_history.total_commits} commits</span></div>`+
     D.intent_history.recent.map(c=>`<div class="li mono">${esc(c)}</div>`).join("");
-  if(name==="change-safety"){const cs=D.change_safety;return `<div class="li"><span class="muted">direct consumers (blast)</span> ${chips(cs.blast_radius.length?cs.blast_radius:["leaf — nothing imports it"],cs.blast_radius.length?"":"mut")}</div>`+
+  if(name==="change-safety"){const cs=D.change_safety;return `<div class="li"><span class="muted">direct consumers (import)</span> ${chips(cs.blast_radius.length?cs.blast_radius:["leaf — nothing imports it"],cs.blast_radius.length?"":"mut")}</div>`+
+    (cs.called_by_sectors&&cs.called_by_sectors.length?`<div class="li"><span class="muted">called by (fn-level)</span> ${chips(cs.called_by_sectors)}</div>`:"")+
     (cs.cycles&&cs.cycles.length?`<div class="li"><span class="muted">⚠ dependency cycle with</span> ${chips(cs.cycles,"red")}</div>`:"")+
     `<div class="li"><span class="muted">observability</span> ${esc(cs.observability)}</div>`;}
   if(name==="tests & coverage"){const t=D.tests_coverage;
@@ -249,6 +269,46 @@ function renderCards(g){
       DIMS.map(([n,name])=>`<div class="dimrow"><div class="dn"><b>${n}</b>${esc(name)}</div><div class="dv">${dval(name,s)}</div></div>`).join("");
     C.appendChild(card);
   });
+}
+
+// ── drill-down: per-sector symbol call graph (force layout) ──────────────────
+const svgns="http://www.w3.org/2000/svg";
+function closeDrill(){document.getElementById("drill").classList.add("hidden");}
+function openDrill(sid){
+  if(!GRAPH||!GRAPH.symbols)return;
+  const byId=Object.fromEntries(GRAPH.symbols.map(s=>[s.id,s]));
+  const inS=GRAPH.symbols.filter(s=>s.sector===sid);
+  const deg=s=>s.inc+s.out.length;
+  const top=inS.slice().sort((a,b)=>deg(b)-deg(a)).slice(0,28);
+  const ids=new Set(top.map(s=>s.id));
+  const nodes=top.slice(), extSeen=new Set(), edges=[];
+  top.forEach(s=>s.out.forEach(t=>{
+    if(ids.has(t))edges.push([s.id,t,false]);
+    else if(byId[t]){if(!extSeen.has(t)&&extSeen.size<22){extSeen.add(t);nodes.push(byId[t]);}edges.push([s.id,t,true]);}
+  }));
+  const nset=new Set(nodes.map(n=>n.id));
+  layoutRender(sid,nodes,edges.filter(e=>nset.has(e[0])&&nset.has(e[1])));
+  document.getElementById("drill").classList.remove("hidden");
+}
+function layoutRender(sid,nodes,edges){
+  const W=1000,H=700,pos={};
+  nodes.forEach((n,i)=>{const a=i*2*Math.PI/Math.max(nodes.length,1);pos[n.id]={x:W/2+200*Math.cos(a)+(i%5)*6,y:H/2+200*Math.sin(a),vx:0,vy:0};});
+  for(let it=0;it<140;it++){
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const a=pos[nodes[i].id],b=pos[nodes[j].id];let dx=a.x-b.x,dy=a.y-b.y,d=Math.hypot(dx,dy)||1;const f=2600/(d*d);
+      a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;}
+    edges.forEach(([s,t])=>{const a=pos[s],b=pos[t];if(!a||!b)return;let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;const f=(d-95)*0.02;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;});
+    nodes.forEach(n=>{const p=pos[n.id];p.x+=Math.max(-9,Math.min(9,p.vx));p.y+=Math.max(-9,Math.min(9,p.vy));p.vx*=.84;p.vy*=.84;p.x=Math.max(34,Math.min(W-34,p.x));p.y=Math.max(42,Math.min(H-22,p.y));});
+  }
+  const NE=document.getElementById("dedges"),NN=document.getElementById("dnodes");NE.innerHTML="";NN.innerHTML="";
+  edges.forEach(([s,t,cross])=>{const a=pos[s],b=pos[t];if(!a||!b)return;const p=document.createElementNS(svgns,"path");p.setAttribute("d",`M${a.x},${a.y} L${b.x},${b.y}`);p.setAttribute("class","celledge"+(cross?" cross":""));NE.appendChild(p);});
+  nodes.forEach(n=>{const p=pos[n.id],ext=n.sector!==sid,r=ext?5:Math.min(5+n.inc*0.45,18);
+    const g=document.createElementNS(svgns,"g");g.setAttribute("class","symnode");g.setAttribute("transform",`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+    g.innerHTML=`<circle r="${r.toFixed(1)}" fill="${ext?'#6e7681':'#58a6ff'}" fill-opacity="${ext?.22:.32}" stroke="${ext?'#6e7681':'#58a6ff'}" stroke-width="1.4"><title>${esc(n.sector)}::${esc(n.file.split('/').pop())} — called ${n.inc}×, calls out ${n.out.length}</title></circle>`+
+      `<text text-anchor="middle" y="-${(r+3).toFixed(1)}">${esc(n.name)}${ext?' ·'+esc(n.sector.split('/').pop()):''}</text>`;
+    NN.appendChild(g);});
+  document.getElementById("drill-title").textContent="⤢ "+sid+" — call graph";
+  document.getElementById("drill-meta").innerHTML=`${nodes.filter(n=>n.sector===sid).length} top symbols · ${edges.length} call edges · node size = times called · <span style="color:#bc8cff">dashed = calls into another sector</span>`;
 }
 
 // live updates
