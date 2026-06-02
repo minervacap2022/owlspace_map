@@ -1714,3 +1714,31 @@ bugs:
       run conclusion=success, and the live API reflects the new code without a manual
       `systemctl restart owl-backend`. A red deploy whose log shows "rm: cannot remove
       .../releases/...: Permission denied" => the regression is back.
+
+  - id: BUG-2026-06-02-J
+    title: StartLimitIntervalSec/StartLimitBurst were in [Service] of klik@.service — systemd ignores them there, disabling the crash-loop rate-limit (the torch loop churned to NRestarts=80 unbounded)
+    date: 2026-06-02
+    surface: klik-backend-deploy
+    source_files:
+      - deploy/systemd/klik@.service
+    user_visible_symptom: |
+      systemd start-rate-limit directives (StartLimitIntervalSec, StartLimitBurst)
+      belong in [Unit], but the klik@.service template had them in [Service], where
+      systemd IGNORES them ("Unknown key name 'StartLimitIntervalSec' in section
+      'Service', ignoring" on every action). The rate limit therefore never applied:
+      a crash-looping service restarted UNBOUNDED instead of being marked failed
+      after N fast failures — the torch crash-loop (BUG-2026-06-02-I) churned to
+      NRestarts=80. Fixed in PR #864 by moving both directives to [Unit].
+    lint:
+      - rule: STARTLIMIT_NOT_IN_SERVICE_SECTION
+        pattern: '\[Service\][^\[]*StartLimit(IntervalSec|Burst)'
+        message: "StartLimitIntervalSec/StartLimitBurst inside a unit's [Service] section are silently ignored by systemd ('Unknown key name') — they belong in [Unit], else the crash-loop rate-limit is OFF (klik@.service let the torch loop hit NRestarts=80). A MATCH here IS the bug — move them to [Unit]."
+        file_types: [".service"]
+    chaos:
+      runner: null   # static config guard; the lint + absence of 'Unknown key name' warnings on daemon-reload are the detector.
+      description: A misplaced StartLimit re-disables the rate-limit; the lint catches it at change-time.
+    observable_signal: |
+      ssh gcp "systemctl show klik@auth_api -p StartLimitIntervalUSec" => 1min (NOT the
+      default 10s = the directive ignored). And after a daemon-reload,
+      `sudo journalctl --since '1 min ago' | grep -c "Unknown key name 'StartLimit"` => 0.
+      A non-zero warning count or StartLimitIntervalUSec back at the default => it moved to [Service] again.
