@@ -1,0 +1,1716 @@
+# ============================================================================
+# BUG REGRESSION CATALOG — single source of truth
+# ============================================================================
+# Every production bug we have shipped lives here. Each entry generates:
+#   1. A regex rule loaded by validate_production_rules.py
+#   2. A chaos-phase runner loaded by full-stack-test/klik-ios-e2e-test
+#   3. A row in the SessionEnd-hook reminder when bug-fix commits land
+#
+# Adding a bug:
+#   - Pick a fresh ID: BUG-YYYY-MM-DD-{A,B,C…}
+#   - Fill all required fields (validator + chaos-phase scripts both
+#     refuse to load entries with missing fields — that's intentional)
+#   - Add a chaos runner under scripts/chaos/<id>.sh if applicable.
+#     If the bug is purely static (e.g. an unused fallback string), set
+#     chaos.runner: null.
+#
+# lint: a LIST of mappings (one per pattern). Each mapping:
+#     rule:          UNIQUE rule name (UPPER_SNAKE).
+#     pattern:       regex.
+#     message:       what to tell the committer.
+#     presence:      forbidden (default) = a match IS the bug;
+#                    required = the pattern MUST be present — its ABSENCE is the bug.
+#     globs:         OPTIONAL path globs ('**/X', 'dir/File.kt') scoping the lint to
+#                    specific file(s). REQUIRED for presence:required guards, and the
+#                    way to scope a forbidden pattern that is only bad in one file.
+#     file_types:    OPTIONAL ['.py','.kt'] suffix filter for broad (un-globbed) lints.
+#     exclude_files: OPTIONAL path substrings to skip.
+#   Do NOT invent other lint shapes (no bare `path`/`description` dialect) — the loader
+#   (scripts/load_catalog.py) consumes ONLY these keys; an off-schema entry is NOT
+#   enforced (reported on stderr, never silently dropped).
+#
+# Removing a bug entry requires a matching note explaining what
+# observability/test replaced it. Silence is how we re-debug the same
+# shape twice.
+# ============================================================================
+
+bugs:
+  - id: BUG-2026-05-28-A
+    title: ASR retry classifier matched only one Volcengine error code
+    date: 2026-05-28
+    surface: backend
+    source_files:
+      - /opt/Klik/KK_asr/core/volcengine_transcriber.py
+    user_visible_symptom: |
+      Recording failed silently when Volcengine returned 45000006
+      (Invalid audio URI) instead of 55001010 (timeout). User saw the
+      session as a generic "Meeting on <date>" row with no retry.
+    lint:
+      - rule: NO_SINGLE_CODE_RETRY_CLASSIFIER
+        pattern: '_TIMEOUT_STATUS\s*=\s*["\'']\d{5,}["\'']'
+        message: 'single-code retry classifier — vendor errors come in families, use a tuple of codes'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py", "tests/"]
+      - rule: NO_SINGLE_CODE_RETRY_CLASSIFIER
+        pattern: '_RETRY_STATUS\s*=\s*["\'']\d{5,}["\'']'
+        message: 'single-code retry classifier — use a tuple of codes'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py", "tests/"]
+    chaos:
+      runner: chaos/asr_45000006.sh
+      description: Mock Volcengine to return 45000006 once; assert pipeline retries and completes.
+    observable_signal: |
+      grep 'volcengine_audio_fetch_failure_retry' /opt/Klik/logs/KK_asr.log
+      → if the count is rising in production, retry IS working
+      → if you see pipeline_failed with status=45000006 and NO matching
+        retry log, the classifier regressed
+
+  - id: BUG-2026-05-28-B
+    title: Orchestrator asyncio.create_task retry from sync threadpool
+    date: 2026-05-28
+    surface: backend
+    source_files:
+      - /opt/Klik/KK_orchestrator/orchestrator_api.py
+    user_visible_symptom: |
+      ASR-failed sessions were supposed to auto-retry with backoff but
+      NEVER did. RuntimeError "no running event loop" caught by
+      `except Exception: logger.warning(retry_schedule_failed)` so the
+      dead retry was invisible.
+    lint:
+      - rule: NO_SILENT_RETRY_SCHEDULE_FAILURE
+        pattern: 'logger\.warning\([^)]*retry_schedule_failed'
+        message: 'retry scheduling failure must be logger.error (and paged); warning gets ignored'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py"]
+      - rule: NO_SILENT_RETRY_SCHEDULE_FAILURE
+        pattern: 'logger\.warning\([^)]*pipeline_.*_retry.*failed'
+        message: 'pipeline retry failure must be logger.error, warning hides the dead retry'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py"]
+      - rule: NO_SILENT_RETRY_SCHEDULE_FAILURE
+        pattern: 'logger\.warning\([^)]*retry_failed'
+        message: 'retry failure must be logger.error so monitoring sees it'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py"]
+    chaos:
+      runner: chaos/retry_schedule_fires.sh
+      description: Force ASR to fail once; assert the retry actually fires within backoff window.
+    observable_signal: |
+      pipeline_asr_auto_retry_scheduled event followed by a successful
+      pipeline_completed for the same session_id. If the warning shows
+      up alone the retry was scheduled but never ran.
+
+  - id: BUG-2026-05-28-C
+    title: Fabricated "Meeting on <date>" title hid failed and processing sessions
+    date: 2026-05-28
+    surface: backend
+    source_files:
+      - /opt/Klik/KK_frontendmobile/KK_frontendios/klik_api.py
+      - /opt/Klik/KK_frontendmobile/KK_frontendios/transformers.py
+    user_visible_symptom: |
+      Failed sessions and still-processing sessions rendered as a
+      "Meeting on May 28, 2026" row indistinguishable from completed
+      sessions. User had to escalate by email to discover bugs.
+    lint:
+      - rule: NO_FABRICATED_FALLBACK_STRINGS
+        pattern: 'title\s*=\s*f["\''](?:Meeting|Event|Session|Recording)\s+on\s+\{'
+        message: 'fabricated title from date — leave empty and expose status, do not invent a string'
+        file_types: [".py", ".kt"]
+        exclude_files: ["test/", "_test.py", "Test.kt"]
+      - rule: NO_FABRICATED_FALLBACK_STRINGS
+        pattern: 'title\s*=\s*f["\''](?:Meeting|Event|Session|Recording)\s+\{[^}]*\[:8\]'
+        message: 'fabricated title from session_id prefix — leave empty and expose status'
+        file_types: [".py", ".kt"]
+        exclude_files: ["test/", "_test.py", "Test.kt"]
+    chaos:
+      runner: chaos/failed_session_render.sh
+      description: Create a synthetic failed session; assert /api/v1/meetings returns title="" and status="failed", never a fabricated date.
+    observable_signal: |
+      curl /api/v1/meetings | jq '.items[] | select(.status=="failed").title'
+      → must be "" for every failed row. Any non-empty title is a regression.
+
+  - id: BUG-2026-05-28-D
+    title: Pydantic build outside try/except returned bare 500 with no log
+    date: 2026-05-28
+    surface: backend
+    source_files:
+      - /opt/Klik/KK_meeting_minutes/meeting_minutes_api.py
+    user_visible_symptom: |
+      LLM occasionally returned speakers=[None] inside Discussion.
+      Pydantic raised ValidationError outside the LLM try/except, so
+      FastAPI returned bare 500 to the orchestrator with no structured
+      log. Orchestrator failed the session permanently.
+    lint:
+      - rule: NO_UNGUARDED_LLM_RESPONSE_PARSING
+        pattern: '(?:[a-z_]*minutes_data|[a-z_]*llm_response|[a-z_]*llm_result|[a-z_]*generated)\.get\(["\'']'
+        message: 'LLM-response.get(...) — verify the enclosing try/except covers the FULL parse (Pydantic build, list comprehension, schema validation), not just the LLM call'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py"]
+    chaos:
+      runner: chaos/llm_returns_null_in_array.sh
+      description: Patch meeting_minutes to inject speakers=[None] from a stub LLM; assert the structured minutes_response_build_failed log is emitted before the 500.
+    observable_signal: |
+      grep 'minutes_response_build_failed' /opt/Klik/logs/KK_meeting_minutes.log
+      → presence of this event means the guard fired correctly
+      → orchestrator pipeline_failed with stage=meeting_minutes and NO
+        matching build_failed event = the guard regressed
+
+  - id: BUG-2026-05-28-E
+    title: Stop race — WS-disconnect fallback + speechbrain auto-spawn returned fake "no audio" on every successful Stop
+    date: 2026-05-28
+    surface: backend
+    source_files:
+      - /opt/Klik/KK_frontendmobile/KK_frontendios/iosback/streaming_api.py
+      - /opt/Klik/KK_frontendmobile/KK_frontendios/iosback/stream_stage0_2_speechbrain_pipeline.py
+    user_visible_symptom: |
+      iOS app showed "Session received no audio data" toast on every
+      successful recording stop, even though the real session was
+      fully processed by the orchestrator. Users thought their
+      recordings had failed and re-recorded.
+    lint:
+      - rule: NO_FALLBACK_FINALIZE_ON_DISCONNECT
+        pattern: 'force_finalize_session\([^)]*\)\s*(?:#.*)?$\s*\)?\s*(?:except|finally)?'
+        message: 'force_finalize_session inside a disconnect/cleanup handler is a fallback path that races the legitimate /stop. Recording lifecycle must be owned by a single explicit endpoint.'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py"]
+      - rule: NO_UNCONDITIONAL_NEXT_SESSION_SPAWN
+        pattern: '_create_new_session\([^)]*\)\s*(?:#|$)(?![\s\S]{0,200}user_stop)'
+        message: '_create_new_session called unconditionally inside a finalize path — user_stop triggers must NOT spawn a successor session (the user said stop)'
+        file_types: [".py"]
+        exclude_files: ["test/", "_test.py"]
+    chaos:
+      runner: chaos/stop_race_no_phantom_error.sh
+      description: Submit a recording, send /stop, and assert the response status is 'success', never 'no_audio_frames'. Also assert no second SESSION_CREATED event fires between SESSION_FINALIZED and the orchestrator submit.
+    observable_signal: |
+      grep 'Stop failed.*no_audio_frames' /opt/Klik/logs/KK_frontendmobile.log
+      → ANY occurrence after this fix landed = the race regressed
+      grep 'SESSION_CREATED.*timestamp_ms.*92100' /opt/Klik/logs/KK_frontendmobile.log
+      → a SESSION_CREATED with a stream_offset matching a SESSION_FINALIZED
+        from the same stream means the user_stop guard regressed
+
+  - id: BUG-2026-05-28-F
+    title: CancellationException eaten as failure + URLSession recycle armed the refresh cooldown on every foreground, bricking all API calls
+    date: 2026-05-28
+    surface: ios
+    source_files:
+      - liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/network/HttpClient.kt
+      - liquid/samples/composeApp/src/iosMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/network/NativeHttpClient.ios.kt
+    user_visible_symptom: |
+      On every brief app foreground (notification tap, Control Center,
+      app switch), every backend call failed 401 for ~30 seconds while
+      logs spammed "Token refresh cooling down (last attempt 0s ago),
+      skipping". User saw "Initialization Error" toast offering to file
+      a GitHub issue. Self-resolved after the cooldown expired and a
+      refresh finally succeeded.
+    lint:
+      - rule: NO_CATCH_CANCELLATION_AS_FAILURE
+        pattern: 'catch\s*\(\s*\w+\s*:\s*(?:Exception|Throwable)\s*\)\s*\{[^}]*lastRefresh|catch\s*\(\s*\w+\s*:\s*(?:Exception|Throwable)\s*\)\s*\{[^}]{0,200}refresh.*=\s*false'
+        message: 'A bare catch(Exception) inside a token-refresh/auth path eats CancellationException. Catch CancellationException separately, reset any in-flight cooldown, and rethrow.'
+        file_types: [".kt"]
+        exclude_files: ["test/", "Test.kt"]
+      - rule: NO_UNCONDITIONAL_SESSION_RECYCLE
+        pattern: 'foregroundEvents.*onEach.*\{.*isForeground.*recycleSession|isForeground.*->.*recycleSession\('
+        message: 'Recycling the NSURLSession on every foreground event kills in-flight requests on every brief app switch. Gate the recycle behind a real staleness threshold (>=30s background).'
+        file_types: [".kt"]
+        exclude_files: ["test/", "Test.kt"]
+    chaos:
+      runner: chaos/foreground_does_not_brick_auth.sh
+      description: After backgrounding then immediately foregrounding the iOS app, the next backend call must succeed within 5s. ANY 'Token refresh cooling down' in the iOS logs within 30s of foreground = regression.
+    observable_signal: |
+      grep 'Token refresh cooling down (last attempt 0s ago)' iOS device logs
+      → presence within 5s of a foreground event = regression
+      grep 'NSURLSession recycled' iOS device logs
+      → should now include a 'backgrounded for Ns' reason and NEVER fire
+        on background<30s transitions
+
+  - id: BUG-2026-05-29-A
+    title: K1Type.X.copy(fontSize = N.sp) overrides bypassed K1FontSizeState scale and clipped time row under Dynamic Type
+    date: 2026-05-29
+    surface: ios
+    source_files:
+      - liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/TodayScreen.kt
+      - liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/AskKlikSheet.kt
+      - liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/EntityDetailSheets.kt
+      - liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/LiveRecordingScreen.kt
+      - liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/MovesScreen.kt
+      - liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/NetworkScreen.kt
+    user_visible_symptom: |
+      Today screen "UP NEXT" row clipped the time string to
+      "12:32 AM - 12:…" the moment the user enlarged iOS Dynamic Type
+      or K1FontSizeState. The chevron / KLIK DETECTED eyebrow / Retry
+      pill / battery pill / unread count / org-initials avatar stayed
+      visually tiny when everything else scaled. The clip wasn't an
+      ellipsis the user could expand — the text was simply gone.
+    lint:
+      - rule: NO_FONTSIZE_OVERRIDE_ON_K1TYPE
+        pattern: 'K1Type\.[a-zA-Z]+\.copy\([^)]*fontSize\s*=\s*\d+\.sp'
+        message: 'K1Type.X.copy(fontSize = N.sp) pins the size and bypasses K1FontSizeState scale → text stops responding to Dynamic Type. Pick the right K1Type variant (eyebrow/meta/metaSm/bodySm/bodyMd/…) or add one to the design system instead.'
+        file_types: [".kt"]
+        exclude_files: ["test/", "Test.kt", "KlikOneKit.kt"]
+      - rule: NO_FIXED_DP_TIME_COLUMN
+        pattern: 'Column\(\s*Modifier\.width\(\s*\d+\.dp\s*\)\s*\)\s*\{[^}]*m\.time'
+        message: 'Fixed-DP container around SP-scaled text clips under Dynamic Type. Let the column size to its content (drop the .width modifier) and use weight(1f) on the sibling.'
+        file_types: [".kt"]
+        exclude_files: ["test/", "Test.kt"]
+      - rule: NO_TEXTOVERFLOW_ELLIPSIS_MASKING_LAYOUT_BUG
+        pattern: 'TextOverflow\.Ellipsis[^}]{0,400}m\.time|m\.time[^}]{0,400}TextOverflow\.Ellipsis'
+        message: 'Ellipsis on the meeting time is a silent-truncation fallback hiding a fixed-DP layout against SP-scaled text. Fix the layout (size to content) instead of masking it with ellipsis.'
+        file_types: [".kt"]
+        exclude_files: ["test/", "Test.kt"]
+    chaos:
+      runner: chaos/dynamic_type_no_clip.sh
+      description: Launch the iOS sim with UIPreferredContentSizeCategoryName = UICTContentSizeCategoryAccessibilityXXXL, navigate to Today, snapshot the UP NEXT row. Assert m.time renders unclipped (visible width = intrinsic width of the time string) AND no text in the row falls back to the default 12sp meta size. Repeat at the K1FontSizeState 0.8×, 1.0×, 1.2×, 1.5×, 2.0× steps.
+    observable_signal: |
+      Visual: at iOS Accessibility XXXL the Today / Moves / Network /
+      Live-Recording screens must render every text element scaled
+      relative to K1Type's base — nothing stays at a hardcoded sp. The
+      UP NEXT row's time column shows the full "12:32 AM - 12:32 AM"
+      string, wrapped to a second line if it has to, but never clipped.
+      Code: zero matches for `K1Type\.[a-zA-Z]+\.copy\(.*fontSize = \d+\.sp`
+      across ui/klikone/ excluding KlikOneKit.kt itself.
+
+  - id: BUG-2026-05-29-L
+    title: Owlbots could never talk to each other — shouldRespond dropped ALL bot-authored messages, even explicit @mentions
+    date: 2026-05-29
+    surface: owlspace-cloud-host
+    source_files:
+      - /Users/wilsonxu/Owlspace_re/packages/owl-agent-server/src/stoat/bot-pool.ts
+    user_visible_symptom: |
+      In a shared always-on channel, multiple owlbots each reply to the
+      human but can never address one another. Asking a bot to "@mention"
+      another bot does nothing — the target bot stays silent. Users see
+      every bot say "I can't message other agents / each session is
+      isolated."
+    lint:
+      - rule: NO_UNCONDITIONAL_BOT_AUTHOR_DROP
+        pattern: 'knownBotIds\?\.has\(msg\.authorStoatId\)\)\s*return false[\s\S]{0,200}isExplicitlyMentioned'
+        message: 'bot-author guard placed BEFORE the explicit-mention check re-breaks bot-to-bot delegation. Explicit <@id>/@name must win first; only auto-replies to bots are blocked.'
+        file_types: [".ts"]
+        exclude_files: ["__tests__/", ".test.ts"]
+    chaos:
+      runner: null   # Klik chaos infra can't spin up Owlspace cloud bots. Real guard is
+                     # the repo unit test (bot-pool.test.ts: "DOES reply to another bot when
+                     # explicitly @name-mentioned") + nextBotHops budget tests. Live-verified
+                     # 2026-05-29: Bob @Forming → Forming replied, chain stopped after 1 hop.
+      description: Covered by owl-agent-server unit tests + a live cloud-host inject (Bob posts @Forming, assert Forming's WS logs decision=true and posts exactly one reply, then goes quiet).
+    observable_signal: |
+      Cloud-host journal (ssh owlspace → journalctl -u owl-agent-server):
+      a message authored by a known bot that @-mentions another bot must
+      log `[bot-pool] decision=true ... botStoatId=<mentioned-bot>` followed
+      by `SPAWNING session`. If it logs decision=false for an explicit
+      @mention from a bot, the guard regressed. Runaway check: a bot→bot
+      chain must stop within botHopBudget (6) hops — watch for
+      `bot-hop budget (6) reached ... suppressing bot→bot reply`.
+
+  - id: BUG-2026-05-29-B
+    title: Bot reply truncated mid-sentence when the LLM stream is interrupted (no text_complete) — sink never finalized
+    date: 2026-05-29
+    surface: owlspace-cloud-host
+    source_files:
+      - /Users/wilsonxu/Owlspace_re/packages/owl-agent-server/src/stoat/channel-sink.ts
+    user_visible_symptom: |
+      A bot's reply in a channel is cut off mid-sentence (e.g. ends at an
+      unclosed "(e.g. `M") and looks like a complete but nonsensical
+      message. Recurs intermittently ("cut off again") whenever the
+      upstream LLM stream drops mid-completion (proxy model_cooldown /
+      provider failover / dropped connection).
+    lint:
+      - rule: SINK_MUST_FINALIZE_ON_TERMINAL_EVENTS
+        pattern: "case 'text_complete':[\\s\\S]{0,4000}default:"
+        message: "StoatChannelSink switch must handle 'error' AND 'session_complete' between text_complete and default — they are the only finalize hooks when a turn ends without text_complete. Removing them silently re-truncates interrupted replies."
+        file_types: [".ts"]
+        exclude_files: ["__tests__/", ".test.ts"]
+        # NOTE: inverted-intent lint — this pattern MATCHING is the healthy state.
+        # Treat as a presence check in review, not an auto-fail. Real guard is the
+        # channel-sink.test.ts "interrupted turns" suite.
+    chaos:
+      runner: null   # Requires a mid-stream LLM abort against the live cloud-host; not
+                     # reproducible in Klik CI. Guarded by channel-sink.test.ts:
+                     # "flushes the partial AND appends an interruption marker on an
+                     # `error` event" + the session_complete sweep test.
+      description: Covered by owl-agent-server unit tests (error + session_complete finalize, plus the "clean turn not marked" race guard).
+    observable_signal: |
+      An interrupted reply now ends with the INTERRUPTED_MARKER
+      ("⚠️ reply interrupted — the model stopped early") instead of being
+      silently cut off. If channel replies are still truncating with NO
+      marker, the sink stopped finalizing on error/session_complete.
+
+  - id: BUG-2026-05-29-C
+    title: Empty knownBotIds → always-on owlbots ping-pong forever (loop guard never engages)
+    date: 2026-05-29
+    surface: owlspace-cloud-host
+    source_files:
+      - /Users/wilsonxu/Owlspace_re/packages/owl-agent-server/src/stoat/bot-pool.ts
+    user_visible_symptom: |
+      Multiple always-on owlbots in one channel reply to EACH OTHER in an
+      unbounded loop (e.g. "your message got cut off — what do you need?"
+      back and forth), burning tokens. Happens when backend-sync hasn't
+      populated the org bot set yet (startup window, port-contention
+      crash-loop, or a failing /v1/me/channel-bots).
+    lint:
+      - rule: EMPTY_KNOWNBOTS_MUST_BLOCK_ALWAYS_ON
+        presence: required
+        globs: ['**/stoat/bot-pool.ts']
+        pattern: "knownBotIds && ctx.knownBotIds.size === 0"
+        message: "shouldRespond must treat a defined-but-empty knownBotIds as 'guard not loaded' and refuse always-on auto-reply (mention-only). Removing this check lets always-on bots loop before the bot-set loads. Inverted-intent lint: this pattern MATCHING is the healthy state."
+        file_types: [".ts"]
+        exclude_files: ["__tests__/", ".test.ts"]
+    chaos:
+      runner: null   # Requires a multi-bot always-on channel + a stalled backend-sync; not
+                     # reproducible in Klik CI. Guarded by bot-pool.test.ts: "refuses always-on
+                     # auto-reply when knownBotIds is defined-but-empty (guard not loaded)".
+      description: Covered by owl-agent-server unit tests (empty-set blocks always-on; mention still honored; undefined preserves legacy behavior).
+    observable_signal: |
+      Cloud/local owl-server journal: if you see many `[bot-pool] decision=true`
+      for bot-authored, NON-@-mentioning messages in one channel, the guard is
+      off (empty knownBotIds). Healthy: bot-authored non-mention messages log
+      `decision=false`. Also watch for `runtime restarted N times ... giving up`
+      (port-8787 contention) which is what strands knownBotIds empty.
+
+  - id: BUG-2026-05-29-D
+    title: Owlbots unaware of their channel — told users "I can't talk to other agents" despite working @mention routing
+    date: 2026-05-29
+    surface: owlspace-owlbots
+    source_files:
+      - /Users/wilsonxu/Owlspace_re/packages/owl-agent/src/prompts/system-prompt.ts
+      - /Users/wilsonxu/Owlspace_re/packages/owl-agent-server/src/runtime/runtime.ts
+    user_visible_symptom: |
+      In a shared multi-bot channel, owlbots reply "I'm a single isolated
+      agent, each session is isolated, I can't message other agents" — even
+      though @mention routing between bots actually works. The bot has no
+      idea it's in a channel with named peers it could @mention.
+    lint:
+      - rule: SYSTEM_PROMPT_MUST_EMIT_CHANNEL_BLOCK
+        pattern: "input.channel"
+        message: "buildSystemPrompt must accept and emit a <channel> roster block so channel-bound owlbots know they're in a shared space and can @mention peers. Removing it regresses bots back to 'I'm isolated'. Inverted-intent: this match is the healthy state."
+        file_types: [".ts"]
+        exclude_files: ["__tests__/", ".test.ts"]
+    chaos:
+      runner: null   # Needs a live multi-bot channel + an LLM turn; not reproducible in Klik CI.
+                     # Guarded by owl-agent system-prompt.test.ts "channel awareness" suite.
+      description: Covered by unit tests asserting the <channel> block names the channel + peer @handles and is omitted for 1:1 sessions.
+    observable_signal: |
+      A channel-bound owlbot's system prompt must contain a <channel> block
+      listing peer @handles. If bots in a channel claim isolation, the roster
+      injection (channelRosterFor → buildSystemPrompt channel arg) regressed.
+      Note: the roster is best-effort per runtime (a runtime only lists bots
+      its ChannelStore synced) — cross-owner peers need the org-wide directory.
+
+  - id: BUG-2026-05-29-E
+    title: Renderer outDir not emptied — stale hashed bundles (incl. removed code) ship in the app + OTA
+    date: 2026-05-29
+    surface: owlspace-build
+    source_files:
+      - /Users/wilsonxu/Owlspace_re/apps/owlspace/package.json
+    user_visible_symptom: |
+      Removed UI (e.g. the Performance toggles) still appeared in grep of the
+      packaged app and bloated the OTA zip, because `vite build` left 13+
+      stale main-*.js bundles in dist/renderer (outDir is outside the vite
+      root so vite skips emptying it by default). Active bundle was correct,
+      but dead legacy bundles shipped.
+    lint:
+      - rule: VITE_BUILD_MUST_EMPTY_OUTDIR
+        presence: required
+        globs: ['**/owlspace/package.json']
+        pattern: '"build:renderer":\s*"vite build --emptyOutDir"'
+        message: "build:renderer must pass --emptyOutDir or stale hashed bundles accumulate in dist/renderer and ship in the app/OTA. Inverted-intent: this match is the healthy state."
+        file_types: [".json"]
+        exclude_files: ["node_modules/"]
+    chaos:
+      runner: null   # Build-config hygiene; not a runtime failure. Verified by counting
+                     # main-*.js bundles in a fresh build (should be exactly 1 active set).
+      description: After a clean build, dist/renderer/assets should contain only the current build's hashed bundles, not accumulated stale ones.
+    observable_signal: |
+      In the packaged app, `ls Contents/Resources/app/dist/renderer/assets/main-*.js`
+      should match only the bundle referenced by index.html (plus its code-split
+      chunks) — not a dozen stale main-*.js from prior builds. Multiple unrelated
+      main-*.js = outDir not being emptied.
+
+  # ── 2026-05-29: Session-detail speaker / avatar / name consistency ──────────
+
+  - id: BUG-2026-05-29-F
+    title: resolveSpeakerName checked canonicalName before speakerMap — rename never took effect
+    date: 2026-05-29
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/SessionDetailScreen.kt
+    user_visible_symptom: |
+      Renaming a person from the session detail screen (long-press chip →
+      RenameEntityDialog) had no visible effect: the chip label, transcript
+      speaker label, and summary text all kept showing the old name even
+      after a successful PUT to /api/entity-feedback. Reload cleared it.
+    # Guarded by a UNIT TEST, not a regex lint: this is a line-ORDER invariant
+    # (the speakerMap lookup must PRECEDE the canonicalName lookup), which the
+    # line-based validator cannot express without false-positiving on the
+    # legitimate canonicalName fallback line that healthy code also contains.
+    # The sound guard lives in commonTest:
+    #   SpeakerNameResolutionTest.speakerMapOverride_beatsCanonicalAndName
+    chaos:
+      runner: null   # guarded by commonTest SpeakerNameResolutionTest (iosSimulatorArm64Test), not a lint
+      description: >-
+        Regression caught by
+        SpeakerNameResolutionTest.speakerMapOverride_beatsCanonicalAndName:
+        resolveSpeakerName(p, mapOf(p.id to "Live Name")) must return "Live Name",
+        never p.canonicalName. A line-based regex cannot assert call ORDER soundly.
+    observable_signal: |
+      After a person rename in session detail, the chip label and transcript
+      speaker name must update in the same composition frame (no reload needed).
+      If the old name persists, speakerMap is no longer the first lookup.
+
+  - id: BUG-2026-05-29-G
+    title: TranscriptPanel used raw label as speakerMap key — "Speaker N" ordinals never resolved to names
+    date: 2026-05-29
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/SessionDetailScreen.kt
+    user_visible_symptom: |
+      Session-detail Transcript tab showed "Speaker 1" / "Speaker 2" even
+      when the Summary tab header chips showed fully resolved names ("海蒂",
+      "老板"). The speakerMap was keyed by VP_ voiceprint IDs but the
+      transcript raw text contained ordinal labels like "Speaker 1: …".
+      speakerMap["Speaker 1"] always returned null so the label was never
+      resolved.
+    lint:
+      - rule: TRANSCRIPT_MUST_BUILD_LABEL_TO_PERSONID_MAP
+        presence: forbidden   # pattern = the buggy direct-lookup form; its presence IS the bug
+        pattern: 'val speakerLabel\s*=\s*speakerMap\[parsed\.speaker\]'
+        message: 'TranscriptPanel resolves parsed.speaker directly in speakerMap; speakerMap is keyed by person.id not by raw labels. Build a speakerLabelToPersonId map from participants first.'
+        file_types: [".kt"]
+        exclude_files: ["Test.kt", "test/"]
+    chaos:
+      runner: null
+      description: Regression is caught by the lint rule above (direct speakerMap lookup on raw label).
+    observable_signal: |
+      Open any session whose transcript still contains "Speaker N:" lines.
+      The Transcript tab must show the resolved canonical name (matching the
+      header chips), never "Speaker N". Regression = "Speaker N" in transcript
+      when the same person's chip in the header shows a real name.
+
+  - id: BUG-2026-05-29-H
+    title: Transcript K1Avatar idSeed was the raw transcript label — colour mismatched header chips
+    date: 2026-05-29
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/SessionDetailScreen.kt
+    user_visible_symptom: |
+      Avatar colour in the Transcript tab was different from the same
+      person's avatar in the session header chips. Header chip used
+      idSeed = p.id (VP_… voiceprint ID); transcript used
+      idSeed = parsed.speaker ("海蒂" or "Speaker 1") which hashes to
+      a completely different palette bucket.
+    lint:
+      - rule: TRANSCRIPT_AVATAR_SEED_MUST_BE_PERSONID
+        presence: forbidden
+        globs: ['**/klikone/SessionDetailScreen.kt']
+        pattern: 'idSeed\s*=\s*parsed\.speaker'
+        message: 'Transcript K1Avatar seeded on raw label, not person.id — colours will differ from header chips. Use resolvedPersonId.'
+        file_types: [".kt"]
+        exclude_files: ["Test.kt", "test/"]
+    chaos:
+      runner: null
+      description: Visual-only regression; caught by lint rule above.
+    observable_signal: |
+      In the Transcript tab, the avatar colour for "海蒂" / any resolved speaker
+      must be identical to the colour shown in the header chip for the same person.
+      Regression = visually different colours for the same entity on the same screen.
+
+  - id: BUG-2026-05-29-I
+    title: Session header chips read p.avatarUrl from stale meeting.participants — avatar upload not reflected
+    date: 2026-05-29
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/SessionDetailScreen.kt
+    user_visible_symptom: |
+      After uploading a new avatar for a person in their profile screen,
+      navigating back to any session detail still showed the old initial
+      ("海") in the participant chip instead of the new photo/colour.
+      AppModule.reloadPeople() updated peopleState.value but meeting.participants
+      is a frozen snapshot from the meetings API response and was not refreshed.
+    lint:
+      - rule: SESSION_CHIP_MUST_READ_FRESH_AVATAR
+        presence: forbidden
+        globs: ['**/klikone/SessionDetailScreen.kt']
+        pattern: 'avatarUrl\s*=\s*p\.avatarUrl'
+        message: 'Session header chip reads avatarUrl from meeting.participants (stale snapshot). Read from the fresh people list: people.find { it.id == p.id }?.avatarUrl ?: p.avatarUrl'
+        file_types: [".kt"]
+        exclude_files: ["Test.kt", "test/", "PersonDetailScreen", "EntityDetailSheets"]
+    chaos:
+      runner: null
+      description: No runtime chaos runner. Avatar upload is interactive; regression visible after picking new photo.
+    observable_signal: |
+      Upload a new avatar for any participant. Without leaving the person
+      profile, navigate back to their session. The chip must show the new
+      avatar in the same app session. Regression = old initial/photo persists
+      in the chip until the meetings list is reloaded.
+
+  - id: BUG-2026-05-29-J
+    title: PersonDetailScreen showed blank name and 0 sessions for unresolved voiceprint speakers
+    date: 2026-05-29
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/EntityDetailSheets.kt
+    user_visible_symptom: |
+      (1) Tapping a "Speaker 1" chip (unresolved voiceprint) opened a Person
+      profile with "—" as the name (title bar blank) and a pink empty avatar
+      circle — canonicalName was blank and name was not consulted.
+      (2) Tapping a resolved person ("老板") showed "RELATED SESSIONS · 0"
+      even though that person appeared as a participant in multiple sessions.
+      The personMeetings filter matched only by person.id; when the people API
+      and meetings API emitted different IDs for the same physical person during
+      voiceprint resolution lag, no sessions matched.
+    lint:
+      - rule: PERSON_DISPLAY_NAME_MUST_FALLBACK_TO_NAME
+        presence: forbidden
+        globs: ['**/klikone/EntityDetailSheets.kt']
+        pattern: 'val personDisplayName\s*=\s*person\.canonicalName\s*$'
+        message: 'personDisplayName falls through to blank when canonicalName is empty. Use: person.canonicalName.ifBlank { person.name }'
+        file_types: [".kt"]
+        exclude_files: ["Test.kt", "test/"]
+      - rule: PERSON_SESSIONS_FILTER_MUST_INCLUDE_NAME_MATCH
+        presence: forbidden
+        globs: ['**/klikone/EntityDetailSheets.kt']
+        pattern: 'm\.participants\.any\s*\{\s*p\s*->\s*p\.id\s*==\s*person\.id\s*\}'
+        message: 'personMeetings filter matches only by person.id — add name-based fallback for voiceprint ID divergence: also match p.canonicalName / p.name against personDisplayName'
+        file_types: [".kt"]
+        exclude_files: ["Test.kt", "test/"]
+    chaos:
+      runner: null
+      description: Regression is caught by the two lint rules above.
+    observable_signal: |
+      (1) Tap any "Speaker N" chip from a session. The person profile title
+      must show "Speaker N" (from person.name), never "—".
+      (2) Tap a resolved person chip. "RELATED SESSIONS" must list at least
+      the session from which the chip was tapped.
+
+  - id: BUG-2026-05-29-M
+    title: Cross-owner owlbots showed as raw ULID names + missing from peer rosters (no org-wide directory)
+    date: 2026-05-29
+    surface: owlspace-org-directory
+    source_files:
+      - /Users/wilsonxu/owl-backend/src/routes/me.ts
+      - /Users/wilsonxu/Owlspace_re/apps/owlspace/src/renderer/pages/channels/ChannelFeed.tsx
+      - /Users/wilsonxu/Owlspace_re/packages/owl-agent-server/src/runtime/runtime.ts
+    user_visible_symptom: |
+      On a machine that doesn't OWN a given owlbot, that bot's messages
+      rendered as a raw ULID prefix ("01KRWF…") instead of its name, and the
+      bot was absent from other bots' @mention peer rosters — because clients
+      only knew their own bots, not org-visible bots from other owners.
+    lint:
+      - rule: CHANNEL_BOTS_MUST_EXPOSE_ORG_ROSTER
+        pattern: "org_roster"
+        message: "The channel-bots endpoints must return org_roster so clients resolve cross-owner owlbot names + build complete peer rosters. Inverted-intent: this match is the healthy state."
+        file_types: [".ts"]
+        exclude_files: ["__tests__/", ".test.ts"]
+    chaos:
+      runner: null   # Needs a multi-owner org + cross-machine view; not reproducible in Klik CI.
+                     # Guarded by mergeChannelPeers unit tests + the additive backend query.
+      description: org_roster returns all visibility='org' bots (id+name+channel, no tokens); renderer speaker map + runtime channelRosterFor consume it.
+    observable_signal: |
+      GET /v1/me/channel-bots returns a non-empty org_roster including bots
+      owned by other users (e.g. 'ahhah'/strategy). If channel authors render
+      as ULIDs or a bot is missing from peers, org_roster is empty/unconsumed.
+
+  - id: BUG-2026-05-29-K
+    title: Today session card time in same Row as title — cramped layout on long time ranges
+    date: 2026-05-29
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/TodayScreen.kt
+    user_visible_symptom: |
+      Session cards with a long time range ("12:32 AM - 12:36 AM") consumed
+      roughly half the card width, leaving the title squeezed into a narrow
+      weight(1f) column. Cards with summary text wrapped awkwardly while the
+      left half was mostly empty time-range string.
+    lint:
+      - rule: NO_TIME_INLINE_WITH_TITLE_IN_SESSION_CARD
+        pattern: 'K1Type\.meta.*KlikInkSecondary[^}]{0,200}Column\(Modifier\.weight\(1f\)\)'
+        message: 'Session card time is in the same Row as the title column — move time to its own line above the title so the title gets full card width'
+        file_types: [".kt"]
+        exclude_files: ["Test.kt", "test/"]
+    chaos:
+      runner: null
+      description: Pure layout bug; no runtime failure mode. Regression is visible when a session card has a time range string longer than ~10 chars (any AM/PM range).
+    observable_signal: |
+      On the Today screen, session cards with time ranges like "12:32 AM -
+      12:36 AM" must show the time on its own first line and the title on
+      the full-width second line. Regression = time and title share a Row,
+      leaving the title in a narrow weight(1f) column.
+
+  - id: BUG-2026-05-30-A
+    title: Dead "Connection Icons" settings toggle — persisted a localStorage key nothing read
+    date: 2026-05-30
+    surface: owlspace-settings
+    source_files:
+      - /Users/wilsonxu/Owlspace_re/apps/owlspace/src/renderer/pages/settings/AppearanceSettingsPage.tsx
+    user_visible_symptom: |
+      The Appearance settings "Connection Icons" toggle flipped on/off and
+      persisted craft-show-connection-icons to localStorage, but nothing ever
+      read that key, so the toggle changed nothing — dead UI.
+    lint:
+      - rule: NO_WRITE_ONLY_SETTINGS_KEY
+        pattern: "showConnectionIcons"
+        message: "showConnectionIcons was a write-only settings key (no reader). A settings toggle must have a consumer that reads its persisted value. Re-introducing this symbol implies the dead toggle came back."
+        file_types: [".ts", ".tsx"]
+        exclude_files: ["__tests__/", ".test.ts"]
+    chaos:
+      runner: null   # Pure dead-UI removal; no runtime failure mode. Guard is the lint rule:
+                     # the symbol must not reappear without a reader.
+      description: A settings control must trace to a consumer that reads its persisted value; write-only keys are dead.
+    observable_signal: |
+      grep for a settings storage key across the repo should always find a
+      READER (not just the setter + the toggle's own state). If a key's only
+      refs are its definition + the toggle that writes it, it's dead.
+
+  # ── 2026-05-31: the meta-bug — prevention authored but never enforced ───────
+
+  - id: BUG-2026-05-31-A
+    title: Anti-regression loop (guards + CI + hooks) authored but never committed — CI ran nothing, prevention prevented nothing
+    date: 2026-05-31
+    surface: tooling-ci
+    source_files:
+      - Klik_one/.github/workflows/k1-guards.yml
+      - Klik_one/.github/workflows/app-tests.yml
+      - Klik_one/liquid/scripts/repo-guards.sh
+      - Klik_one/liquid/scripts/k1-guards.sh
+    user_visible_symptom: |
+      The Klik_one repo's first feedback loop — landmine guards, the app's
+      ~197-test suite wired into CI, a pre-commit hook — was written across two
+      sessions (2026-05-30/31) and reported "shipped", but every file was
+      UNTRACKED (?? in git status). GitHub Actions had no workflow at the repo
+      root, so CI ran nothing; the guards lived only in one working tree. The
+      whack-a-mole bug pattern the loop was built to stop (64 fix vs 48 feat
+      commits, MainApp.kt 61 edits) kept going unchecked. The fix for the bug
+      factory was produced exactly the way the bug factory produces everything:
+      done-in-the-tree, never enforced. Fixed by committing the loop (PR #2 on
+      minervacap2022/Klik_one) — turning CI on immediately
+      exposed THREE more instances of the same "green lives in one working tree,
+      not git" disease, each surfaced only after the previous was fixed:
+      BUG-2026-05-31-B (hardcoded local JDK path), BUG-2026-05-31-C (China-region
+      Maven mirror), and compileTestKotlin failing because the
+      NewRuleViewModelTest history() fix was ALSO uncommitted. Four faces, one
+      root cause.
+    chaos:
+      runner: chaos/ci_loop_committed.sh
+      description: |
+        Asserts the loop is wired in, not just present: CI workflows are
+        git-TRACKED at the repo root (Actions only reads .github/workflows at
+        root), the guard scripts the workflows invoke are tracked, and both
+        guards exit 0. Proven both directions 2026-05-31 — passes on the
+        committed loop, FAILS (exit 1, "no committed CI workflows") on a repo
+        where the loop is only in the working tree. Point it at another repo
+        with KLIK_ONE_REPO=<path>.
+    observable_signal: |
+      `git ls-files .github/workflows | grep -cE '\.ya?ml$'` must be ≥1 — zero
+      means CI is uncommitted and inert. Cross-check on GitHub:
+      `gh run list --repo <owner>/<repo>` should show k1-guards + app-tests
+      runs on every PR/push. No runs ever = the loop was authored but never
+      committed (this bug). A lint regex CANNOT catch this — the failure is
+      absence, so the guard is the chaos runner above.
+
+  - id: BUG-2026-05-31-B
+    title: liquid/gradle.properties pins org.gradle.java.home to the author's local temurin-17 path — every CI runner + other machine fails at Gradle launch
+    date: 2026-05-31
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/gradle.properties
+    user_visible_symptom: |
+      The brand-new app-tests CI job (PR #2) failed in 30s on its FIRST run with
+      "Value '/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home'
+      given for org.gradle.java.home Gradle property is invalid". The repo pins
+      Gradle's JDK to an absolute path that only exists on the author's Mac.
+      Locally it's load-bearing (this Mac's DEFAULT JDK is 25, which Gradle
+      8.10.2 rejects, so the pin forces Gradle onto 17) — which is exactly why
+      it was never noticed: it works on one machine and breaks everywhere else.
+      A textbook "no hardcoded values" violation hiding in build config.
+    lint:
+      - rule: NO_ABSOLUTE_JDK_PATH_IN_TRACKED_GRADLE_PROPS
+        pattern: 'org\.gradle\.java\.home\s*=\s*/'
+        message: "org.gradle.java.home is pinned to an absolute machine path in a tracked gradle.properties — breaks CI and every other machine. Machine-specific JDK paths belong in ~/.gradle/gradle.properties (untracked), not in VCS. CI selects its JDK via setup-java + -Dorg.gradle.java.home=$JAVA_HOME."
+        file_types: [".properties"]
+        exclude_files: ["test/", "build/"]
+    chaos:
+      runner: null   # The presence check above IS the guard. Runtime proof is the
+                     # app-tests CI job itself: it now installs Temurin 17 and passes
+                     # -Dorg.gradle.java.home=$JAVA_HOME, so a re-pinned absolute path
+                     # no longer breaks CI — but the lint stops it returning to VCS.
+      description: A tracked gradle.properties must not pin org.gradle.java.home to an absolute path. The fix overrides it in CI; the lint keeps the bad pattern from spreading.
+    observable_signal: |
+      `git grep -n 'org.gradle.java.home\s*=\s*/' -- '*.properties'` in any repo
+      must return nothing. A hit means a machine-specific JDK path is committed
+      and CI/other machines will fail at Gradle launch ("Java home supplied is
+      invalid"). The same anti-pattern likely exists in the Klik_newandroid
+      mirror — check there too.
+
+  - id: BUG-2026-05-31-C
+    title: settings.gradle.kts lists maven.aliyun.com (China mirror) ahead of Central — CI 502s at dependency resolution (Gradle won't fall through a 5xx)
+    date: 2026-05-31
+    surface: ios-frontend
+    source_files:
+      - Klik_one/liquid/settings.gradle.kts
+      - Klik_one/liquid/build-logic/settings.gradle.kts
+    user_visible_symptom: |
+      With the JDK pin fixed (BUG-2026-05-31-B), the app-tests CI job got 5m33s
+      into the build and then failed: "Could not resolve
+      kotlinx-serialization-json-js:1.7.3 ... Could not GET
+      'https://maven.aliyun.com/repository/central/.../*.module'. Received status
+      code 502 from server: Bad Gateway". The build lists the aliyun China-region
+      mirror FIRST (for the author's local network speed); from GitHub's runners
+      it 502s, and Gradle does NOT fall through to the next repo on a 5xx (only on
+      a 404), so the declared mavenCentral() right after never gets a turn. Third
+      machine/region-specific landmine in one CI run — all invisible until CI ran.
+    lint:
+      - rule: NO_REGION_MIRROR_AS_PRIMARY_IN_TRACKED_SETTINGS
+        pattern: 'maven\.aliyun\.com'
+        message: "A region-specific Maven mirror (maven.aliyun.com) is committed in settings.gradle.kts ahead of Central. It 502s from non-region CI/runners and Gradle won't fall through a 5xx. Keep Central/Google primary in VCS; put regional mirrors in ~/.gradle/init.gradle, or strip them in CI via --init-script (see liquid/scripts/ci-no-aliyun.init.gradle)."
+        file_types: [".kts", ".gradle"]
+        exclude_files: ["scripts/ci-no-aliyun.init.gradle", "build/"]
+    chaos:
+      runner: null   # The presence check is the guard. Runtime proof is the app-tests
+                     # CI job, which passes --init-script ci-no-aliyun.init.gradle to
+                     # strip aliyun so resolution comes from Central+Google. The lint
+                     # keeps a region mirror from silently becoming the CI-primary repo.
+      description: Committed build config must resolve from canonical repos (Central/Google); region mirrors are a per-developer ~/.gradle concern. CI strips aliyun via an init script.
+    observable_signal: |
+      `git grep -n 'maven.aliyun.com' -- '*.gradle.kts' '*.gradle'` should only
+      match inside scripts/ci-no-aliyun.init.gradle (the stripper), never as a
+      live primary repo in settings.gradle.kts. If `gh run view <app-tests-run>`
+      fails with "502 ... maven.aliyun.com" again, the init-script override was
+      dropped or a new region mirror was added ahead of Central.
+
+  - id: BUG-2026-05-31-D
+    title: AndroidKmpLibraryConventionPlugin set Kotlin jvmTarget=11 but not Android compileOptions — Java defaulted to 1.8, KGP "Inconsistent JVM-target" build failure
+    date: 2026-05-31
+    surface: android-frontend
+    source_files:
+      - Klik_newandroid/build-logic/convention/src/main/kotlin/AndroidKmpLibraryConventionPlugin.kt
+    user_visible_symptom: |
+      On the Klik_newandroid mirror, wiring the app-tests gate surfaced a latent
+      build bug: `:core:testing:compileDebugKotlinAndroid` failed with
+      "Inconsistent JVM-target compatibility detected for tasks
+      'compileDebugJavaWithJavac' (1.8) and 'compileDebugKotlinAndroid' (11)".
+      The AndroidKmpLibrary convention plugin set the Kotlin androidTarget
+      jvmTarget to JVM_11 but never set the Android LibraryExtension
+      compileOptions, so Java defaulted to 1.8 — a mismatch KGP fails hard on.
+      Any module using that plugin (core:testing, etc.) couldn't compile its
+      Android variant, so testDebugUnitTest never ran. The sibling
+      KotlinMultiplatformConventionPlugin already set both sides to 11.
+    lint:
+      - rule: ANDROID_KMP_CONVENTION_MUST_SET_COMPILEOPTIONS
+        presence: required
+        globs: ['**/AndroidKmpLibraryConventionPlugin.kt']
+        pattern: "compileOptions"
+        message: "AndroidKmpLibraryConventionPlugin must set Android compileOptions (sourceCompatibility/targetCompatibility) to match the Kotlin androidTarget jvmTarget. Without it Java defaults to 1.8 and KGP fails 'Inconsistent JVM-target'. Inverted-intent: this match is the healthy state — file_types scope keeps it to the convention plugin."
+        file_types: [".kt"]
+        exclude_files: ["src/main/kotlin/KotlinMultiplatform", "samples/", "test/"]
+    chaos:
+      runner: null   # The real runtime guard is the app-tests CI job itself, which
+                     # now runs :samples:composeApp:testDebugUnitTest — a JVM-target
+                     # regression makes :core:testing fail to compile and the job goes
+                     # red. The inverted-intent lint stops the compileOptions block
+                     # from silently disappearing from the convention plugin.
+      description: Android convention plugins must align Java and Kotlin JVM targets; the app-tests gate compiles :core:testing so any regression is caught.
+    observable_signal: |
+      `git grep -c "compileOptions" -- '*/AndroidKmpLibraryConventionPlugin.kt'`
+      must be ≥1. If the block is removed, `./gradlew
+      :samples:composeApp:testDebugUnitTest` fails at
+      `:core:testing:compileDebugKotlinAndroid` with "Inconsistent JVM-target
+      compatibility (1.8 vs 11)" — and the mirror's app-tests CI goes red.
+
+  - id: BUG-2026-05-31-E
+    title: SPM1423 PDM mic unpowered — AXP192 LDOIO0 rail never enabled, I2S read constant DC, every recording a ~58 Hz drone
+    date: 2026-05-31
+    surface: firmware-esp32
+    source_files:
+      - klik_esp32/main/klik_axp192.c
+    user_visible_symptom: |
+      Every klik recording came back as a loud ~58 Hz pure tone instead of
+      speech; transcripts were empty/garbage. Root cause was hardware power,
+      not DSP: on the M5StickC the SPM1423 PDM mic's VDD is the AXP192 LDOIO0
+      rail (PMU GPIO0 in LDO mode). klik_axp192_init() never enabled it, so the
+      mic was dead and the I2S PDM RX latched a constant DC value
+      (~-30935 every sample) — a DC/near-DC signal that renders downstream as a
+      ~58 Hz drone. Fixed by reg_write(0x90,0x02) (GPIO0 → LDO mode) +
+      reg_write(0x91,0xF0) (LDOIO0 = 3.3 V) in init. Mic proven alive after.
+    lint:
+      - rule: AXP192_MUST_POWER_LDOIO0_FOR_MIC
+        presence: required
+        globs: ['**/klik_axp192.c']
+        pattern: "0x90"
+        message: "klik_axp192_init must enable LDOIO0 (reg 0x90=0x02 GPIO0→LDO mode, reg 0x91 voltage) to power the SPM1423 PDM mic. Without it the mic is unpowered and I2S reads constant DC → ~58 Hz drone, no audio. Inverted-intent: the presence of these register writes IS the healthy state."
+        file_types: [".c"]
+        exclude_files: ["build/"]
+    chaos:
+      runner: null   # No host-runnable runtime harness for physical-mic power — the
+                     # real proof is a device recording whose WAV spectrum is broadband
+                     # speech, not a DC drone. The presence lint (reg 0x90/0x91 writes)
+                     # is the static guard; the boot self-test (dead-constant vs live
+                     # signal) is the on-device runtime check.
+      description: Mic power is a hardware-init invariant; the LDOIO0 register writes must remain in klik_axp192_init or audio dies silently into a DC drone.
+    observable_signal: |
+      A finalized recording WAV must show broadband speech-band content
+      (spectral centroid ~400-660 Hz, flatness ~0.04-0.08), NOT the dead-mic
+      signature (centroid ~58-59 Hz, flatness ~0.0007, raw PDM samples pinned
+      near a constant ~-30935). `git grep -c "reg_write(0x90" -- '*/klik_axp192.c'`
+      and `... "reg_write(0x91"` must each be ≥1; if either drops to 0 the mic
+      power-up was removed and audio reverts to the 58 Hz drone.
+
+  - id: BUG-2026-05-31-G
+    title: systemd klik-launch.sh ran services with a bare env (no common.sh) — subscription_api /health KeyError crash-loop
+    date: 2026-05-31
+    surface: backend
+    source_files:
+      - /opt/Klik/deploy/scripts/klik-launch.sh
+    user_visible_symptom: |
+      After the nohup->systemd cutover, klik@subscription_api (port 8416) ran
+      stable for ~20s then crash-looped (activating/failed, MainPID lost, orphan
+      held the port -> "address already in use" flap). Root cause was NOT a fork
+      or systemd supervision issue (uvicorn runs as a clean single process) — it
+      was the ENVIRONMENT: restart_all.sh sources KK_common/scripts/common.sh and
+      runs setup_paths -> load_config_from_yaml, which exports every
+      KK_*_PORT/HOST + POSTGRES_*/REDIS_* + INTERNAL_API_KEY from config/*.yaml,
+      so nohup services had them. klik-launch.sh (the systemd template launcher)
+      did NOT source it, so the env was bare. subscription_api's config resolves
+      ${KK_SUBSCRIPTION_PORT} on every /health hit; unset -> KeyError -> 500 ->
+      the ~2s health probe tore the service down -> Restart=always flap. Fixed by
+      making klik-launch.sh source common.sh + setup_paths (PR backend #851).
+    lint:
+      - rule: KLIK_LAUNCH_MUST_LOAD_COMMON_ENV
+        presence: required
+        globs: ['**/klik-launch.sh']
+        pattern: "setup_paths"
+        message: "klik-launch.sh must source KK_common/scripts/common.sh and call setup_paths so systemd services get the same env (KK_*_PORT etc. from config/*.yaml) the nohup model had. Removing it reverts to a bare env and any service resolving a ${KK_*_PORT} placeholder crash-loops. Inverted-intent: this match is the healthy state."
+        file_types: [".sh"]
+        exclude_files: ["test/", ".bak"]
+    chaos:
+      runner: null   # Reproducing needs the live systemd host + a config-resolving
+                     # service. Guard = the inverted-intent lint (setup_paths present
+                     # in klik-launch.sh) + the observable_signal below.
+      description: The systemd launcher must load the same config-derived env the nohup model exported; without it, env-placeholder-resolving services crash-loop.
+    observable_signal: |
+      journalctl -u 'klik@*' should NOT contain
+      "KeyError: ... Environment variable 'KK_..._PORT' is not set". Per service:
+      `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:<port>/health`
+      must be 200, and `systemctl show klik@<svc> -p NRestarts` must stay flat.
+      `grep -c setup_paths /opt/Klik/deploy/scripts/klik-launch.sh` must be >=1.
+
+  - id: BUG-2026-05-31-F
+    title: Running systemd stack diverges from the committed deploy model — the integration/env/duplicate/orphan class unit tests structurally can't see
+    date: 2026-05-31
+    surface: backend
+    source_files:
+      - /opt/Klik/deploy/scripts/klik-deploy-parity.sh
+    user_visible_symptom: |
+      The umbrella for the whole 2026-05-31 nohup->systemd migration class. Each
+      was "running reality != committed model", and unit tests were GREEN the
+      entire time (they run from the same local state whose divergence IS the
+      bug): a live service has no managing klik@ unit (pipeline_api .env gap ->
+      orphan); TWO units bind one port (kk-suggest.service duplicated
+      klik@suggest_api -> flap + double-fired rules); the systemd env lacks
+      config the app resolves (subscription_api bare env -> /health 500 ->
+      crash-loop); a disabled unit's children linger in its cgroup fighting
+      systemd (klik-watchdog orphans -> auth flap). None are logic bugs.
+    lint:
+      - rule: DEPLOY_PARITY_GATE_MUST_STAY_WIRED
+        presence: required
+        globs: ['**/klik-deploy-parity.sh']
+        pattern: "klik-deploy-parity"
+        message: "the deploy-parity gate (deploy/scripts/klik-deploy-parity.sh, run by klik-parity.timer every 5 min) is the ONLY automated check for the running-stack-vs-committed-model class. If it disappears from deploy/, the whole migration bug class goes undetected again. Inverted-intent: this match in deploy/ is the healthy state."
+        file_types: [".sh", ".timer", ".service"]
+        exclude_files: ["test/"]
+    chaos:
+      runner: null   # Lives ON the prod host as klik-parity.timer (every 5 min) +
+                     # a post-deploy gate, NOT in the Klik-CI chaos framework (it
+                     # needs the live systemd stack). Proven both directions
+                     # 2026-05-31: PARITY OK / exit 0 on the healthy stack;
+                     # PARITY FAILED / exit 1 (names the violation) on a planted
+                     # phantom service.
+      description: READ-ONLY gate — one-listener-per-port-in-its-active-unit, env parity (launcher sources common.sh, no 5xx), no-procs-in-dead-cgroups, no-flapping. Safe replacement for the removed klik-watchdog (reports, never restarts).
+    observable_signal: |
+      `ssh gcp 'sudo /opt/Klik/deploy/scripts/klik-deploy-parity.sh; echo $?'`
+      must print "PARITY OK" and exit 0. `systemctl is-active klik-parity.timer`
+      must be active. If the last timer run failed
+      (`systemctl --failed | grep klik-parity`), `journalctl -u
+      klik-parity.service` names exactly which invariant broke + how to reap it.
+
+  - id: BUG-2026-06-01-A
+    title: EVE shadow_runner computed the candidate agent's crash/zero-signal outcome but dropped it — broken skill edits silently sat 5 days before discard
+    date: 2026-06-01
+    surface: backend
+    source_files:
+      - /opt/eve/evolution/shadow_runner.py
+      - /opt/eve/evolution/experiment.py
+    user_visible_symptom: |
+      A nightly evolution skill_edit that crashed the agent or produced zero
+      signals under the candidate SKILL.md was only discovered ~5 trading days
+      later, when evaluate_shadow_hypotheses marked it 'no_shadow_signals'. The
+      agent's once-per-night evolution slot was wasted for the whole window.
+      shadow_runner._spawn_shadow_agent already classified the subprocess result
+      ('agent_error'/'timeout'/'module_missing') but run() only appended it to a
+      summary dict and never acted on it. Fixed by Gate 1a: _finalize_shadow_run
+      flips the skill_evolution shadow row to 'discarded' immediately on crash or
+      zero-signal (PR #1, evolution-quantcode-gates).
+    lint:
+      - rule: SHADOW_RUNNER_MUST_ACT_ON_RUN_OUTCOME
+        presence: required
+        globs: ['**/shadow_runner.py']
+        pattern: "_finalize_shadow_run"
+        message: "shadow_runner.run() must call _finalize_shadow_run on each spawn result so a crashed/zero-signal candidate is discarded now, not after the 5-day window. If this call disappears, broken skill edits silently waste the agent's nightly evolution slot again. Inverted-intent: this match is the healthy state."
+        file_types: [".py"]
+        exclude_files: ["tests/", ".bak"]
+    chaos:
+      runner: null   # Reproduction needs the live eve-db + a real 5-day shadow
+                     # window. Guard = the inverted-intent lint above + the unit
+                     # tests (tests/test_shadow_fast_fail.py: _shadow_outcome /
+                     # _finalize_shadow_run) + the observable_signal below.
+      description: A shadow row whose candidate agent crashed or emitted zero signals must be discarded on the first shadow_runner tick, not left in 'shadow' status until the 5-day eval.
+    observable_signal: |
+      No skill_evolution row should stay status='shadow' after a shadow_runner
+      run in which its agent returned non-zero or wrote zero shadow_signal_scores:
+      docker exec eve-db psql -U eve -d eve -t -c "SELECT count(*) FROM
+      skill_evolution se WHERE se.status='shadow' AND se.shadow_started_at <
+      NOW() - INTERVAL '1 day' AND NOT EXISTS (SELECT 1 FROM shadow_signal_scores
+      s WHERE s.agent_id=se.agent_id);" should trend to 0.
+      grep -c _finalize_shadow_run /opt/eve/evolution/shadow_runner.py must be >=2.
+
+  - id: BUG-2026-06-01-O
+    title: ESP32 NS double-windowed with no overlap-add (~50 Hz tremolo) — FIXED by WOLA rewrite
+    date: 2026-06-01
+    surface: firmware
+    source_files:
+      - klik_esp32/main/klik_ns.c
+    user_visible_symptom: |
+      With noise-suppression ON, recorded audio had a ~50 Hz amplitude tremolo and
+      was badly degraded. klik_ns advanced a full 480-sample frame into a 512-pt FFT
+      carrying only 32 samples of overlap, while applying a Hann window on BOTH
+      analysis and synthesis — so the round trip multiplied each frame by ~w[i]^2
+      (zero at frame edges). Reconstruction error ~70%; on-device frame-edge/center
+      amplitude ratio measured 0.002.
+      FIXED (2026-06-01): rewritten as a streaming weighted-overlap-add — sqrt-Hann
+      analysis+synthesis (COLA-exact), FFT_N=512, HOP=256, sliding buffer + output
+      FIFO. NS re-enabled by default; on-device ratio now 1.036 (flat).
+    lint:
+      - rule: NS_USE_PERIODIC_HANN_FOR_COLA
+        presence: forbidden   # symmetric Hann ÷(FFT_N-1) = the tremolo bug; presence IS the bug
+        pattern: 'cos[^;]*FFT_N\s*-\s*1'
+        message: 'symmetric Hann (÷(FFT_N-1)) breaks 50%-overlap COLA — the original tremolo bug; use periodic Hann (÷FFT_N) so sqrt-Hann analysis·synthesis sums to 1'
+        file_types: [".c"]
+        exclude_files: ["test/", "tools/"]
+      - rule: NS_NO_TINY_OVERLAP_BUFFER
+        presence: forbidden   # the broken 32-sample overlap; presence IS the bug
+        pattern: 's_overlap\s*\[\s*FFT_N\s*-\s*FRAME_N'
+        message: 'reintroduces the broken 32-sample overlap (480-hop into 512-FFT) — use a proper HOP=FFT_N/2 streaming WOLA'
+        file_types: [".c"]
+        exclude_files: ["test/", "tools/"]
+    chaos:
+      runner: null   # firmware DSP; runs on-device, not in the backend chaos harness
+      description: Offline guard is tools/ns_model_test.py — models the exact streaming windowing/OLA and FAILS if reconstruction error or per-frame envelope regresses.
+    observable_signal: |
+      python3 tools/ns_model_test.py   → exits 0 only if the streaming WOLA matches
+      the trusted whole-signal reference (<2%) and the OLD scheme is shown broken
+      (70% / edge→0). On device a tone through klik_ns_process must come out flat
+      (frame edge/center amplitude ratio ~1.0, NOT ~0.002).
+
+  - id: BUG-2026-06-01-B
+    title: ESP32 NS bin gate used an absolute power threshold (scale-dependent)
+    date: 2026-06-01
+    surface: firmware
+    source_files:
+      - klik_esp32/main/klik_ns.c
+    user_visible_symptom: |
+      Quiet mic input (SPM1423 ~-50 dBFS) had whole speech bins zeroed because the
+      per-bin gain used `gain = (pow > 1.0f) ? sqrt(out/pow) : 0` — an ABSOLUTE
+      threshold in an otherwise ratio-based (scale-invariant) algorithm. This forced
+      a +12 dB capture gain workaround that then clipped loud/close speech.
+    lint:
+      - rule: NO_ABSOLUTE_POWER_GATE_IN_NS
+        pattern: 'pow\s*>\s*1\.0f'
+        message: 'absolute power gate is scale-dependent; use a tiny epsilon (e.g. 1e-12f) as a divide-by-zero guard so NS stays ratio-based / scale-invariant'
+        file_types: [".c"]
+        exclude_files: ["test/", "tools/"]
+    chaos:
+      runner: null   # firmware DSP
+      description: tools/ns_model_test.py measures gate scale-dependence (18.2% absolute vs 0.0% epsilon).
+    observable_signal: |
+      python3 tools/ns_model_test.py → the REV-2 section prints
+      "output changes X% when input is scaled 8x"; must read ~0% (scale-invariant).
+
+  - id: BUG-2026-06-01-C
+    title: ESP32 re-entered BLE PAIR on every boot despite having paired before
+    date: 2026-06-01
+    surface: firmware
+    source_files:
+      - klik_esp32/main/klik_ble.c
+      - klik_esp32/main/main.c
+      - klik_esp32/main/klik_state_machine.c
+    user_visible_symptom: |
+      A device that had already paired/connected still booted into PAIR (blue slow
+      blink, waiting for a central) after every power cycle, instead of recording.
+      The boot decision gated on ctx->ble_paired / ctx->first_pair_done, both RAM
+      flags reset to 0 by klik_sm_init on every boot. Fix: persist a "paired once"
+      flag in NVS (klik_ble_mark_paired on connect) and restore first_pair_done at
+      boot via klik_ble_paired_before().
+    chaos:
+      runner: null   # firmware; verified on-device
+      description: After a central connects once, a reboot must skip PAIR and go to SAVE/REC. Factory reset (nvs erase) must restore first-use PAIR.
+    observable_signal: |
+      Serial after first connect: "SEC-003: marked paired — future boots skip PAIR".
+      Serial on a subsequent boot: "Previously paired — boot will record, not enter
+      PAIR" and STATE BOOT → SAVE (not → PAIR). First-ever boot (or post-factory-
+      reset) must still show STATE BOOT → PAIR.
+
+  - id: BUG-2026-06-01-D
+    title: ESP32 OTA did not stop recording / enter OTA state (SM-010 violation)
+    date: 2026-06-01
+    surface: firmware
+    source_files:
+      - klik_esp32/main/klik_ota.c
+    user_visible_symptom: |
+      An OTA could be received while the device was actively recording, contending
+      the flash bus (SPIFFS audio append vs esp_ota_write) — PRD SM-010 says OTA
+      forbids recording. klik_ota_begin now calls klik_sm_on_ota(1) to stop capture
+      and enter OTA state; klik_ota_abort calls klik_sm_on_ota(0) so a failed OTA
+      doesn't leave the device stuck (long-press is disabled in OTA state).
+    chaos:
+      runner: null   # firmware; verified on-device via tools/ota_push.py --no-stop
+      description: Push an OTA WITHOUT stopping recording first; firmware must auto-stop and complete.
+    observable_signal: |
+      tools/ota_push.py --no-stop, then watch serial: "OTA begin" must be followed
+      by "Recording stop" and "STATE SAVE → OTA". OTA then completes and reboots
+      into the new version (App version + partition offset change).
+
+  - id: BUG-2026-06-01-E
+    title: iOS/Android app did not auto-reconnect a paired Klik in SAVE mode (scan-gated reconnect)
+    date: 2026-06-01
+    surface: frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/KlikDeviceStateRepository.kt
+    user_visible_symptom: |
+      A previously-paired device that is powered on and advertising in the always-on
+      SAVE/READY power mode was not auto-reconnected by the app — the UI sat on
+      "offline". KlikDeviceStateRepository.tryAutoReconnect() gated reconnect on a
+      service-UUID-filtered scan (client.scan().first{...}); the new power model
+      trims the advertisement (no FFE0 service UUID / "Klik-" local name in low-power
+      adv), so iOS scanForPeripheralsWithServices never surfaced it and the reconnect
+      silently timed out via withTimeoutOrNull. App-side counterpart of firmware
+      BUG-2026-06-01-C. Fix: connect DIRECTLY to the known device (iOS
+      retrievePeripheralsWithIdentifiers + connectPeripheral, no timeout,
+      advertising-independent; Android getRemoteDevice + connectGatt). Scan is now
+      only a fallback when the OS cannot resolve the id (e.g. reinstall).
+    lint:
+      # The OLD scan-first reconnect logged this exact string. Its reappearance means
+      # someone re-gated auto-reconnect on a scan — the regression is back.
+      pattern: 'auto-reconnect scanning for'
+      globs:
+        - "**/data/klik/KlikDeviceStateRepository.kt"
+    chaos:
+      runner: 'cd Klik_one/liquid && ./gradlew :samples:composeApp:iosSimulatorArm64Test --tests "*KlikDeviceStateRepositoryReconnectTest*"'
+      description: A known-but-dropped device must be reconnected via a direct connect() (scanCalls==0); scan is used only when the direct connect never reaches Connected.
+    observable_signal: |
+      iOS/Android log on reconnect must read "auto-reconnect connecting to known
+      id=..." (direct connect). The old "auto-reconnect scanning for id=..." must NOT
+      appear. On hardware: a paired device left in SAVE mode reconnects without a
+      manual nudge.
+
+  - id: BUG-2026-06-01-F
+    title: OTA acks/errs were decoded then dropped — OTA was undriveable from the app
+    date: 2026-06-01
+    surface: frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/KlikDeviceStateRepository.kt
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/KlikOtaDriver.kt
+    user_visible_symptom: |
+      Firmware OTA over FFE4 works (firmware note C), but the app could not drive it:
+      KlikEventDecoder produced KlikEvent.OtaAck/OtaErr, yet KlikDeviceStateRepository.
+      reduce() let them fall into the catch-all `else` branch and dropped them, so no
+      consumer could ever observe an ACK — the stop-and-wait OTA loop had nothing to
+      wait on. Fix: surface OtaAck/OtaErr on a new otaEvents flow and add KlikOtaDriver
+      (BEGIN -> per-chunk CHUNK/ACK with retry + first-chunk partition-erase timeout
+      + OTA_ERR abort + battery gate), mirroring tools/ota_push.py.
+    chaos:
+      runner: 'cd Klik_one/liquid && ./gradlew :samples:composeApp:iosSimulatorArm64Test --tests "*KlikOtaDriverTest*"'
+      description: Drive a full image through a fake OtaChannel; assert framing, per-chunk ACK flow-control, retry-on-dropped-ACK, OTA_ERR abort, battery gate, and reboot-on-END handling.
+    observable_signal: |
+      KlikOtaDriver.pushFirmware returns OtaResult.Succeeded(deviceConfirmed=true) on
+      the happy path; on hardware the FFE1 log shows OTA_ACK seq advancing 0..N then a
+      version bump. Regression tripwire: KlikDeviceStateRepository.otaEvents emits
+      nothing while an OTA is in flight.
+
+  - id: BUG-2026-06-01-G
+    title: Highlight marks double-POSTed on reconnect (no replay de-dup)
+    date: 2026-06-01
+    surface: frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/platform/KlikHighlightUploader.kt
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/HighlightDeduper.kt
+    user_visible_symptom: |
+      On reconnect the firmware replays each highlight mark's ±2min window AND
+      re-sends marks during linear backfill (firmware note G). KlikHighlightUploader
+      POSTed every Highlight event with no de-dup, so a single user double-click
+      landed on the backend multiple times — the user's highlight count inflated on
+      every reconnect. Fix: HighlightDeduper (identity = deviceTimestampMs:markId,
+      bounded LRU) gates uploads; each mark POSTs exactly once.
+    chaos:
+      runner: 'cd Klik_one/liquid && ./gradlew :samples:composeApp:iosSimulatorArm64Test --tests "*HighlightDeduperTest*"'
+      description: Live mark + its ±2min replay copy + its linear-backfill copy (same deviceTimestampMs+markId) must upload exactly once; distinct marks all pass.
+    observable_signal: |
+      On reconnect-replay the iOS/Android log shows "highlight mark=N ts=T already
+      uploaded — skipping replay duplicate" for repeats; the backend receives one
+      POST /audio/highlight per real mark, not one per replay.
+
+  - id: BUG-2026-06-01-H
+    title: OTA firmware endpoint must sit behind the nginx /api/v1/klik/ route, with its own /health
+    date: 2026-06-01
+    surface: backend
+    source_files:
+      - KK_frontendmobile/KK_frontendios/firmware_api.py
+      - deploy/services/firmware_api.env
+    user_visible_symptom: |
+      The OTA endpoint (/api/v1/klik/firmware/{latest,file}) was first wired into
+      klik_api (port 8004) because that service serves most /api/v1/* routes. But
+      nginx has a MORE-SPECIFIC location block — `location /api/v1/klik/ { proxy_pass
+      http://127.0.0.1:8002/...; }` — that preempts the general /api/v1/ -> 8004
+      proxy. So the public URL https://hiklik.ai/api/v1/klik/firmware/latest resolved
+      to a service WITHOUT the routes → the app would get 404 and never see an update.
+      Same nginx-longest-prefix-precedence trap as the avatar /api/auth proxy gotcha.
+      FINAL design: a DEDICATED firmware_api service on port 8005 (its own
+      deploy/services/firmware_api.env), with nginx `location /api/v1/klik/firmware/
+      { proxy_pass http://127.0.0.1:8005/...; }` (longer prefix wins) while
+      /api/v1/klik/ -> 8002 (devices) stays. Kept off streaming_api(8002) so a
+      firmware deploy never restarts live audio. The new service MUST expose an
+      unconditional /health (no env deps) or the watchdog crash-loops it
+      (see BUG-2026-05-31-G).
+    chaos:
+      runner: null   # requires live nginx + the running 8005 service + a valid JWT; verified by public curl + /health
+      description: |
+        After deploy: (1) GET http://127.0.0.1:8005/health returns 200; (2) an
+        authenticated GET (Bearer JWT) to the PUBLIC host
+        https://hiklik.ai/api/v1/klik/firmware/latest?hw_rev=1 returns the 0.3.1
+        manifest — proving nginx routes /api/v1/klik/firmware/ to the dedicated
+        service that defines the routes — NOT 404.
+    observable_signal: |
+      Service: `systemctl is-active klik@firmware_api` = active; :8005/health = 200.
+      Route-registration: firmware_api.app.routes contains
+      /api/v1/klik/firmware/latest and /api/v1/klik/firmware/file/{hw_rev}/{version}.
+      Public reachability: the authenticated curl returns {available:true,version:"0.3.1",...}.
+      Regression tripwire: a 404 from the public /api/v1/klik/firmware/latest, or the
+      routes appearing on klik_api(8004)/streaming_api(8002) instead of 8005.
+      Regression tripwire: the firmware routes appearing on klik_api(8004) instead of
+      streaming_api(8002), or a 404 from the public /api/v1/klik/firmware/latest.
+
+  - id: BUG-2026-06-01-P
+    title: EVE auto-exec workers could submit live Firstrade orders despite manual-only policy (gated only by a disabled-cron comment)
+    date: 2026-06-01
+    surface: backend
+    source_files:
+      - /opt/eve/execution/auto_execute.py
+      - /opt/eve/execution/intraday_risk.py
+      - /opt/eve/execution/midsession_reweight.py
+    user_visible_symptom: |
+      EVE is manual-only (user places every trade by hand). intraday_risk.py and
+      midsession_reweight.py call the live broker (place_order / mode="live").
+      Their cron entries were disabled 2026-05-20, but the code would still place
+      live orders if run manually or if the cron were re-uncommented — manual-only
+      was enforced only by a '#' in the crontab, not in code.
+    lint:
+      - rule: AUTO_EXEC_WORKERS_MUST_GATE_ON_FLAG
+        presence: required
+        globs: ['**/execution/intraday_risk.py', '**/execution/midsession_reweight.py']
+        pattern: "auto_execute_enabled"
+        message: "intraday_risk.py and midsession_reweight.py must gate every live order path on execution.auto_execute.auto_execute_enabled() (true only when EVE_ALLOW_AUTO_EXECUTE=1). If this call disappears from either worker, manual-only is again only a crontab comment and a stray run can submit live orders. Inverted-intent: this match is the healthy state."
+        file_types: [".py"]
+        exclude_files: ["tests/", ".bak"]
+    chaos:
+      runner: null   # Reproduction would place a real Firstrade order. Guard =
+                     # the inverted-intent lint + tests/test_auto_execute_gate.py
+                     # (asserts no place_order / no execute_daily_rebalance without
+                     # the flag) + the observable signal below.
+      description: With EVE_ALLOW_AUTO_EXECUTE unset, neither worker may reach the broker; both log what they WOULD submit.
+    observable_signal: |
+      `EVE_ALLOW_AUTO_EXECUTE` must be unset/!=1 in the EVE env and crontab; and
+      `grep -c auto_execute_enabled /opt/eve/execution/intraday_risk.py` and
+      `.../midsession_reweight.py` must each be >=1. A manual
+      `python -m execution.intraday_risk` (no --dry-run) must report log-only and
+      place zero orders.
+
+  - id: BUG-2026-06-01-I
+    title: OTA UI swallowed CancellationException + ran the push in a composition scope
+    date: 2026-06-01
+    surface: frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/ui/klikone/KlikDevicePanel.kt
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/KlikOtaCoordinator.kt
+    user_visible_symptom: |
+      Surfaced by the first successful on-device OTA. Two defects in KlikOtaSection:
+      (1) its LaunchedEffect OTA-check did `catch (t: Throwable)` which caught the
+      normal LeftCompositionCancellationException when the device panel left
+      composition — logging a scary [ERROR]+stacktrace and then calling
+      evaluate(info, null) which could RESET the coordinator state mid-flow.
+      (2) The OTA push ran in rememberCoroutineScope() (composition-scoped), so
+      navigating away from the panel during the multi-minute BLE transfer would
+      ABORT the OTA. Fix: rethrow CancellationException (log only real failures), and
+      move fetch+push into KlikOtaCoordinator.startUpdate() on an APP-scoped coroutine
+      so the transfer survives the UI lifetime; UI fires-and-forgets + observes state.
+    chaos:
+      runner: 'cd Klik_one/liquid && ./gradlew :samples:composeApp:iosSimulatorArm64Test --tests "*KlikOtaCoordinatorTest*"'
+      description: startUpdate() resolves the image from the source then pushes to Succeeded, and maps a download failure to Failed — exercised on an injected scope (the push is not tied to a composable).
+    observable_signal: |
+      No "[ERROR][KlikDevicePanel] OTA check failed: The coroutine scope left the
+      composition" in the app log on normal navigation. An OTA continues to progress
+      (coordinator.state stays InProgress -> Succeeded) even if the user leaves the
+      device panel mid-transfer. Regression tripwire: a `catch (Throwable)` in
+      KlikOtaSection without a CancellationException rethrow, or the push launched
+      from rememberCoroutineScope instead of KlikOtaCoordinator.startUpdate.
+
+  - id: BUG-2026-06-01-J
+    title: Sparkle appcast feed repo went private — every other machine silently 404'd and never auto-updated
+    date: 2026-06-01
+    surface: infra
+    source_files:
+      - Owl/Owl-Info.plist
+      - scripts/make-appcast.sh
+    user_visible_symptom: |
+      "The OWLSpace on the other machine isn't getting up-to-date claude." The
+      Sparkle/OWLManualUpdater feed URL (SUFeedURL in Owl-Info.plist) points at
+      raw.githubusercontent.com/minervacap2022/OWLSpace-updates/main/appcast.xml.
+      That repo had been flipped PRIVATE, so an unauthenticated client (Sparkle has
+      no GitHub token) gets HTTP 404 on BOTH the raw appcast AND the
+      releases/download/.../OWLSpace-*.dmg enclosure. Sparkle then silently reports
+      "you're up to date" forever; the machine never installs a newer OWLSpace and
+      its bundled claude stays frozen. The build machine looked fine only because
+      build.sh installs the DMG locally, bypassing the feed. Fix: make the repo
+      public (gh repo edit --visibility public).
+    chaos:
+      runner: 'curl -sL -o /dev/null -w "%{http_code}" https://github.com/minervacap2022/OWLSpace-updates/raw/main/appcast.xml'
+      description: Unauthenticated fetch of the live appcast (what a remote Sparkle sees) must return 200, not 404. Use the github.com/raw host to dodge raw.githubusercontent negative-cache.
+    observable_signal: |
+      `gh repo view minervacap2022/OWLSpace-updates --json visibility` is "PUBLIC",
+      and an unauthenticated `curl` of both the raw appcast.xml and the latest
+      release DMG returns HTTP 200. 404 on either => remote machines are silently
+      stranded on their installed version.
+
+  - id: BUG-2026-06-01-K
+    title: Built-in claude frozen at build time (DISABLE_AUTOUPDATER) with no runtime refresh path
+    date: 2026-06-01
+    surface: backend
+    source_files:
+      - Owl/Sources/App/macOS/Owl/Bootstrap/BundledBinaries.swift
+      - Owl/Sources/App/macOS/Owl/Bootstrap/ClaudeUpdater.swift
+      - Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
+    user_visible_symptom: |
+      Every pane exports DISABLE_AUTOUPDATER=1, so the bundled @anthropic-ai/claude-code
+      never self-updates; it only advanced when a new DMG was built+shipped+installed.
+      npm publishes claude faster than DMGs ship, so the built-in CLI was perpetually
+      behind "latest" (0.1.53 shipped 2.1.156 while npm latest was 2.1.159). Fix:
+      ClaudeUpdater installs @latest into writable ~/OWLSpace/claude on launch, and
+      Owld.claudeCommand resolves the pane's claude via BundledBinaries.claudeBinary()
+      (prefers the self-refreshed copy when its semver >= bundled), NOT resolve("claude").
+    lint:
+      - rule: OWL_CLAUDECMD_NO_RAW_RESOLVE
+        pattern: 'BundledBinaries\.resolve\("claude"\)'
+        message: claudeCommand must build the pane command with claudeBinary() (the freshest-valid resolver), never the raw resolve("claude") which pins the frozen bundled copy.
+        presence: forbidden
+        globs: ['Owl/Sources/App/macOS/Owl/Daemon/Owld.swift']
+    observable_signal: |
+      `grep -c 'BundledBinaries.claudeBinary()' Owl/Sources/App/macOS/Owl/Daemon/Owld.swift`
+      is >=1 and `grep -c 'resolve("claude")' .../Owld.swift` is 0. Unit suite
+      OwlTests/ClaudeRefreshTests passes (semver ordering incl. 2.1.9 < 2.1.10, the
+      prefer-writable-iff->=bundled rule, and the <=12h throttle).
+
+  - id: BUG-2026-06-01-L
+    title: KlikClientImpl connection flow pinned to Dispatchers.Default → intermittent NPE in the shared Kotlin/Native test binary (flaky CI)
+    date: 2026-06-01
+    surface: frontend
+    source_files:
+      - Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/KlikClientImpl.kt
+      - Klik_one/liquid/samples/composeApp/src/commonTest/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/KlikClientImplTest.kt
+    user_visible_symptom: |
+      KlikClientImpl.connect() ended with `.flowOn(Dispatchers.Default)`, so the
+      whole connection state machine (incl. the 800ms POST_SUBSCRIBE settle and all
+      emits) ran on the shared Native worker pool. Under load — once the commonTest
+      binary grew from ~232 to ~836 tests, many connect() flows bridging runTest ↔
+      Dispatchers.Default at once — `KlikClientImplTest."happy path emits Connected"`
+      intermittently threw a bare kotlin.NullPointerException (passed in isolation
+      and on rerun; failed ~1 in 5 full-suite runs). A flaky test is a lying feedback
+      loop: it reddens CI spuriously and trains people to ignore red. Fix: inject
+      `flowDispatcher` (default Dispatchers.Default — production unchanged) and pin it
+      to StandardTestDispatcher(testScheduler) in every test, replacing the
+      `while (...) yield()` real-time busy-waits with advanceUntilIdle(). Now
+      deterministic (verified green 4x) and ~40% faster (virtual settle).
+      Sibling cleanup in the same commit: KlikSessionOffsetStoreTest had a
+      `private fun upsert(...)` that RE-IMPLEMENTED the store's logic and tested the
+      copy (false-green — can never fail when the real store breaks); removed, and the
+      missing injection seam on SecureStorageSessionOffsetStore flagged.
+    lint:
+      - rule: KLIKCLIENT_NO_HARDCODED_DISPATCHER
+        pattern: 'flowOn\(Dispatchers\.Default\)'
+        message: KlikClientImpl.connect must run on the injected flowDispatcher, never a hardcoded .flowOn(Dispatchers.Default) — a match means the testability seam was removed and the Dispatchers.Default flakiness can return.
+        presence: forbidden
+        globs: ['Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app/data/klik/KlikClientImpl.kt']
+    observable_signal: |
+      `grep -c 'flowOn(flowDispatcher)' .../data/klik/KlikClientImpl.kt` is 1 and
+      `grep -c 'flowOn(Dispatchers.Default)' .../KlikClientImpl.kt` is 0. The BLE test
+      class no longer contains `while (` ... `) yield()` busy-waits (grep -c is 0 in
+      KlikClientImplTest.kt). The full `:samples:composeApp:iosSimulatorArm64Test`
+      suite is green across repeated runs (no intermittent NPE in KlikClientImplTest).
+
+  - id: BUG-2026-06-01-M
+    title: Klik_newandroid CI red — android.util.Log "not mocked" throws on testDebugUnitTest (missing returnDefaultValues)
+    date: 2026-06-01
+    surface: frontend
+    source_files:
+      - Klik_newandroid/samples/composeApp/build.gradle.kts
+    user_visible_symptom: |
+      The Android mirror's app-tests CI (`:samples:composeApp:testDebugUnitTest`)
+      went RED on main after OTA/firmware tests were ported from Klik_one: every
+      test whose code path logs through the Android facade threw
+      `java.lang.RuntimeException: Method i in android.util.Log not mocked` (9
+      failures). Android's JVM unit-test target stubs framework classes to throw by
+      default. Klik_one never hit this because it tests on the iOS native target
+      (no android.util.Log). Fix: add `unitTests.isReturnDefaultValues = true` to
+      the mirror's composeApp android { testOptions { } } so the log stub returns
+      defaults instead of throwing. This is per-fork: it belongs in the Android
+      mirror only, not Klik_one (which has no Android unit-test run).
+    lint:
+      - rule: ANDROID_MIRROR_MUST_RETURN_DEFAULT_VALUES
+        pattern: 'isReturnDefaultValues\s*=\s*true'
+        message: The Android mirror's composeApp testOptions MUST set unitTests.isReturnDefaultValues = true, or any commonTest exercising a logging path throws "android.util.Log not mocked" and testDebugUnitTest goes red.
+        presence: required
+        globs: ['Klik_newandroid/samples/composeApp/build.gradle.kts']
+    observable_signal: |
+      `grep -c 'isReturnDefaultValues = true' Klik_newandroid/samples/composeApp/build.gradle.kts`
+      is >= 1, and `./gradlew :samples:composeApp:testDebugUnitTest` is BUILD
+      SUCCESSFUL (no "not mocked" RuntimeException in any *.xml under
+      build/test-results/testDebugUnitTest/).
+
+  - id: BUG-2026-06-01-N
+    title: KK_common.__getattr__ doesn't resolve advertised submodules (logger/config/…) — import-order-dependent AttributeError
+    date: 2026-06-01
+    surface: backend
+    source_files:
+      - KK_common/__init__.py
+    user_visible_symptom: |
+      KK_common/__init__.py lists submodules (auth, config, exceptions, logger,
+      monitoring) in __all__, but its lazy __getattr__ only resolved a subset.
+      `import KK_common; KK_common.logger...` (and `patch("KK_common.logger.X")`)
+      therefore raised AttributeError on a fresh interpreter — and only "worked" if
+      some earlier import happened to load the submodule first. A latent fragility:
+      anything depending on attribute access (vs an explicit `from KK_common import
+      logger`) breaks depending on import order. Fix: __getattr__ resolves any
+      __all__ submodule via importlib.import_module, matching the existing lazy pattern.
+    lint:
+      - rule: KK_COMMON_MUST_LAZY_IMPORT_SUBMODULES
+        pattern: 'importlib\.import_module'
+        message: KK_common/__init__.py __getattr__ must lazily import the submodules advertised in __all__ via importlib, so attribute access resolves regardless of import order.
+        presence: required
+        globs: ['KK_common/__init__.py']
+    observable_signal: |
+      `python -c "import KK_common; print(KK_common.logger.__name__, KK_common.config.__name__)"`
+      succeeds from a fresh interpreter (no prior submodule import). AttributeError =>
+      the lazy resolver regressed and import-order fragility is back.
+
+  - id: BUG-2026-06-02-A
+    title: "[OBSOLETE v1.0.31 — per-session thinking REMOVED, 2-source model] bogus thinking_level in PATCH /api/sessions/:id NULL-wiped the reasoning override"
+    date: 2026-06-02
+    surface: backend
+    source_files:
+      - packages/owl-agent-server/src/http/routes/sessions.ts
+    user_visible_symptom: |
+      OwlSpace's reasoning-effort ("Medium") toggle: when a session already had a
+      per-session thinking override, sending an UNRECOGNISED thinking_level to
+      PATCH /api/sessions/:id silently cleared it. The route guarded on
+      `body.thinking_level !== undefined` and then assigned
+      `validThinkingLevel(body.thinking_level)`, which returns `undefined` for
+      garbage; that `undefined` flowed into store.updateSession, where SQLite bound
+      it as NULL and overwrote the column → the override reverted to "inherit the
+      owlbot" with no error. Caught by a real-env check against the installed
+      v1.0.30 bundle (a bogus PATCH returned thinking_level=null instead of the
+      prior value). Fix: only assign when the value is a RECOGNISED level
+      (`const tl = validThinkingLevel(...); if (tl !== undefined) patch.thinking_level = tl;`);
+      unknown values are ignored, never coerced to NULL.
+    chaos:
+      runner: null
+    observable_signal: |
+      bun test packages/owl-agent-server/src/http/routes/__tests__/sessions-thinking.test.ts
+      passes — specifically the case "PATCH with a bogus level is IGNORED": create a
+      session with thinking_level "low", PATCH {thinking_level:"banana"}, and the
+      returned/persisted thinking_level is still "low" (NOT null). null => the
+      coerce-to-NULL regression is back.
+
+  - id: BUG-2026-06-02-B
+    title: tools:"none" owlbot received full coding set (no reach); all presets lacked reach collaboration escape hatch
+    date: 2026-06-02
+    surface: owlspace-owlbots
+    source_files:
+      - packages/owl-agent-server/src/runtime/runtime.ts
+      - packages/owl-agent/src/index.ts
+    user_visible_symptom: |
+      Two bugs compounded:
+      (1) An owlbot configured with tools:"none" was supposed to have NO base tools,
+      but defaultToolFactory had no `none` branch so it fell through to `codingTools(ctx)`
+      — a tools-restricted owlbot silently received the full coding set.
+      (Note: the branch existed in some states of runtime.ts; the fix makes it
+      explicit, tested, and always present.)
+      (2) The `reach` collaboration tool (ALWAYS_ON_TOOLS = ["reach"]) was never
+      appended to any owlbot's tool set — the factory had no append step at all —
+      so owlbots could never use reach to message peers regardless of their policy.
+    lint:
+      - rule: DEFAULT_TOOL_FACTORY_MUST_APPEND_ALWAYS_ON_TOOLS
+        pattern: 'ALWAYS_ON_TOOLS\.filter\(.*have\.has'
+        message: "defaultToolFactory must dedupe-append ALWAYS_ON_TOOLS after building the base set. Without this step, reach (and future always-on tools) are silently absent from every owlbot. Inverted-intent: this pattern MATCHING is the healthy state."
+        file_types: [".ts"]
+        exclude_files: ["__tests__/", ".test.ts"]
+      - rule: DEFAULT_TOOL_FACTORY_MUST_HANDLE_NONE_EXPLICITLY
+        pattern: "if \\(policy === ['\"]none['\"]\\) base = \\[\\]"
+        message: "defaultToolFactory must have an explicit none→[] branch before the else (codingTools) fallthrough. Without it, tools:'none' owlbots silently receive the full coding set. Inverted-intent: this match is the healthy state."
+        file_types: [".ts"]
+        exclude_files: ["__tests__/", ".test.ts"]
+    chaos:
+      runner: null   # The reach-always-on.test.ts suite IS the chaos harness:
+                     # it exercises coding/readonly/none presets + explicit lists,
+                     # the none-yields-exactly-reach case, the no-duplicate case,
+                     # and the list-that-omits-reach case. 279 tests pass on the
+                     # reach-tool branch; the six new tests fail on the pre-fix
+                     # factory (verified: "Export named 'defaultToolFactory' not found"
+                     # then all 6 assertions fail when exported without the append step).
+      description: Covered by packages/owl-agent-server/src/runtime/__tests__/reach-always-on.test.ts (6 tests); none of the existing 273 tests asserted tools:"none" behavior, so the bug had zero test coverage before this fix.
+    observable_signal: |
+      bun test packages/owl-agent-server/src/runtime/__tests__/reach-always-on.test.ts
+      must pass all 6 cases — specifically:
+        "none yields exactly [reach]" — result is ["reach"], not a full coding set
+        "includes reach for tools='coding'" — reach is in the coding preset
+        "includes reach for tools='readonly'" — reach is in the readonly preset
+        "does not duplicate reach if a list already names it" — dedup works
+      Any failure means either the explicit-none branch or the ALWAYS_ON append was removed.
+      Also: grep for `ALWAYS_ON_TOOLS` in packages/owl-agent/dist/index.js must return
+      a non-empty hit — if missing, the export was dropped from the package public API
+      and the runtime import will throw at startup.
+
+  - id: BUG-2026-06-02-G
+    title: enabled standalone systemd unit (kk-execution-memory-worker) dead since the nohup→systemd cutover, hidden behind a parity gate that only checked the klik@ tier
+    date: 2026-06-02
+    surface: klik-backend-deploy
+    source_files:
+      - deploy/scripts/klik-deploy-parity.sh
+      - deploy/systemd/kk-execution-memory-worker.service
+    user_visible_symptom: |
+      Execution-memory extraction + grading silently stopped running after the
+      2026-05-31 nohup→systemd migration (#842). The kk-execution-memory-worker
+      unit was installed + enabled (WantedBy=multi-user.target) but never started,
+      so it sat ActiveState=inactive/dead for ~the entire life of the systemd
+      deploy (NRestarts=0, empty journal) — and would have surprise-started on the
+      next reboot. It was NOT in klik.target (so `systemctl restart klik.target`
+      never managed it) and NOT covered by klik-deploy-parity.sh, whose checks
+      iterate only deploy/services/*.env (the 39 klik@ template instances). Net:
+      a dead core worker coexisted with a green "PARITY OK" light for days.
+    lint:
+      - rule: PARITY_GATE_MUST_COVER_STANDALONE_TIER
+        presence: required
+        globs: ['**/klik-deploy-parity.sh']
+        pattern: '\[5\] standalone'
+        message: "klik-deploy-parity.sh must keep section [5] that health-asserts the standalone tier (klikmail, goal-scheduler, job-worker, logs, kk-execution-memory-worker) + timers. Without it the green light covers only the 39 klik@ instances and an enabled-but-dead standalone unit is invisible. Inverted-intent: this match IS the healthy state."
+        file_types: [".sh"]
+      - rule: EXECUTION_MEMORY_WORKER_MANAGED_BY_KLIK_TARGET
+        presence: required
+        globs: ['**/kk-execution-memory-worker.service']
+        pattern: 'WantedBy=klik\.target'
+        message: "kk-execution-memory-worker.service must be WantedBy=klik.target (not multi-user.target) so it is group-managed + cycled with the stack instead of resurrecting dead on reboot. Inverted-intent: this match IS the healthy state."
+        file_types: [".service"]
+    chaos:
+      runner: null   # klik-deploy-parity.sh [5] IS the standing detector:
+                     # `bash /opt/Klik/deploy/scripts/klik-deploy-parity.sh` HARD-fails
+                     # if any standalone long-runner is not active, and klik-parity.timer
+                     # runs it every 5 min. No separate chaos runner — the gate is the check.
+      description: The narrow gate (klik@-only) is what let this hide; [5] closes it.
+    observable_signal: |
+      ssh gcp 'systemctl is-active kk-execution-memory-worker.service'            => active
+      ssh gcp 'systemctl show kk-execution-memory-worker.service -p WantedBy --value' => klik.target
+      ssh gcp 'bash /opt/Klik/deploy/scripts/klik-deploy-parity.sh'  => "PARITY OK" with a
+        "[5] standalone tier: all long-runners active, timers armed" line. If [5] reports
+        any unit as a non-active state, an enabled-but-dead standalone unit is back.
+
+  - id: BUG-2026-06-02-H
+    title: 26GB live recording dir KK_frontendmobile/sessions/ was untracked-but-NOT-gitignored — one `git add -A`/`.` from a multi-GB accidental commit (doc/config guard, no runtime failure-mode → chaos null)
+    date: 2026-06-02
+    surface: klik-backend-deploy
+    source_files:
+      - /opt/Klik/.gitignore
+    user_visible_symptom: |
+      KK_frontendmobile/sessions/ holds ~26GB / 2157 live per-session artifacts
+      (.wav/.json/.pcm written continuously by streaming_api as users record).
+      It sat in the /opt/Klik working tree UNTRACKED but NOT gitignored — so it
+      showed in every `git status` and was one `git add -A`/`git add .` away from
+      being staged + committed + pushed (a multi-GB repo blowup + a potential
+      user-audio data exposure). CLAUDE.md forbids `git add -A` precisely to dodge
+      this, but the dir was unguarded. It is LIVE DATA, not cruft — must be
+      gitignored, NOT deleted.
+    lint:
+      - rule: SESSIONS_WORKING_DIR_MUST_BE_GITIGNORED
+        pattern: 'KK_frontendmobile/sessions/'
+        message: ".gitignore must keep the `KK_frontendmobile/sessions/` entry — it's the 26GB live recording working dir written by streaming_api. Without it one `git add -A`/`.` stages multi-GB of user audio. Inverted-intent: this match IS the healthy state. Never delete the data, only keep it ignored."
+        file_types: [".gitignore"]
+    chaos:
+      runner: null   # pure repo-hygiene guard, no runtime failure-mode to exercise.
+      description: The lint (sessions/ present in .gitignore) is the whole detector.
+    observable_signal: |
+      ssh gcp 'cd /opt/Klik && git check-ignore KK_frontendmobile/sessions'  => prints
+      the path (exit 0) == ignored/healthy. Empty output (exit 1) == the ignore rule
+      was dropped and the 26GB dir is stage-able again.
+      Also: `git -C /opt/Klik status --porcelain | grep sessions/` must be EMPTY.
+
+  - id: BUG-2026-06-02-F
+    title: only the Stoat server-owner could create channels / invite members — every other company member got 403 (owl-backend)
+    date: 2026-06-02
+    surface: backend
+    source_files:
+      - owl-backend/src/routes/channels.ts
+      - owl-backend/src/stoat/builtin_channels.ts
+    user_visible_symptom: |
+      In OwlSpace, "New Channel" failed with
+      {"error":"stoat_failed","status":403,"body":{"type":"MissingPermission","permission":"ManageChannel"}}
+      for any company member who was not the one Stoat-server owner (it worked only
+      for that single owner account). Inviting owlbots hit the same 403 (ManageServer);
+      inviting humans silently never joined them to Stoat (DB row only). Root cause:
+      a company's Stoat server is owned by ONE account, Stoat lets only the owner
+      create channels / manage members, but the user-facing /v1/channels routes
+      performed the Stoat op AS THE CALLER. Fix: delegate every mutation through
+      serverOwnerToken(companyId) + ensureHumanInStoatServer (the pattern built-in
+      channels already use); drop the admin-only gate on create; accept any VIEWABLE
+      owlbot (own OR org-visible), not just the caller's own.
+    lint:
+      pattern: 'serverOwnerToken'
+      path: owl-backend/src/routes/channels.ts
+      description: The user-facing channel routes must create/invite via serverOwnerToken (owner delegation), NOT the caller's Stoat token — only the Stoat server owner holds ManageChannel/ManageServer. Match count must be >= 1.
+    chaos:
+      runner: null
+    observable_signal: |
+      As a NON-owner company member (mint a token via issueUserToken on the VM):
+      `POST /v1/channels {"name":"x"}` returns 201 (not 403), and
+      `POST /v1/channels/:id/members/owlbot` with an org-visible agent returns 201.
+      A 403 MissingPermission(ManageChannel|ManageServer) => the caller-token regression is back.
+
+  - id: BUG-2026-06-02-E
+    title: 2GB free Dropbox account silently dropped ~1/3 of audio backups (insufficient_space) → sessions.dropbox_url null; backup now falls back to the cloud-server FS when Dropbox is full
+    date: 2026-06-02
+    surface: klik-cloudstorage-backup
+    source_files:
+      - KK_cloudstorage/backup_api.py
+      - KK_cloudstorage/updown.py
+      - KK_auth/auth_api.py
+    user_visible_symptom: |
+      Only ~12% of sessions (227/1917) had a backup URL. Root cause: the central
+      Dropbox account is a 2GB FREE tier (used 0.91/2.15GB) backing a service that
+      generates 26GB+ of audio. Once full it returns WriteError('insufficient_space');
+      backup was best-effort with NO fallback/retry, so the upload silently failed
+      and sessions.dropbox_url (surfaced to the app as dropboxUrl) stayed null with
+      no reconciliation. (Separate, by-design factor: backup is subscription-tier
+      gated — Starter users skip it; that is NOT a bug.)
+    lint:
+      - rule: BACKUP_HAS_SERVER_FS_FALLBACK
+        pattern: 'get_dropbox_free_bytes|save_to_server'
+        message: "backup_api.backup_upload must pre-check Dropbox free space and fall back to save_to_server() (cloud-server FS) when Dropbox is full, else a full 2GB Dropbox silently drops backups and dropbox_url stays null. Inverted-intent: this match IS the healthy state."
+        file_types: [".py"]
+    chaos:
+      runner: null   # covered by KK_cloudstorage/tests/test_backup_server_fallback.py (5 tests)
+      description: |
+        test_backup_server_fallback.py pins: save_to_server copies + returns the public
+        URL; routing goes to server when free<size, to Dropbox when free>size, and falls
+        back to server on an insufficient_space race.
+    observable_signal: |
+      ssh gcp "cd /opt/Klik && PYTHONPATH=/opt/Klik /opt/Klik/.venv/bin/python -m pytest KK_cloudstorage/tests/test_backup_server_fallback.py -q"  => 5 passed.
+      Live: when Dropbox is full, a backup writes /opt/Klik/uploads/session_audio/<user>/<session>.wav
+      and sets sessions.dropbox_url = https://hiklik.ai/api/auth/static/session-audio/...
+      (curl that URL => 200). Watch KK_cloudstorage.log for backup_routing_server /
+      backup_saved_to_server. If backup_upload no longer references save_to_server, the gap is back.
+
+  - id: BUG-2026-06-02-I
+    title: half-finished torch→CPU migration left the shared venv with torch +cpu/regular dist-info collision + a CUDA torchaudio (libtorch_cuda.so missing) → pipeline_api/streaming_api crash-loop, denoiser 500, ~38% of sessions failed
+    date: 2026-06-02
+    surface: klik-shared-venv
+    source_files:
+      - /opt/Klik/.venv/lib/python3.12/site-packages/torch
+      - /opt/Klik/.venv/lib/python3.12/site-packages/torchaudio
+    user_visible_symptom: |
+      A #857 (dev-lyd) deploy ran a uv operation that left /opt/Klik/.venv torch
+      broken: TWO colliding dist-infos (torch-2.8.0.dist-info AND torch-2.8.0+cpu.dist-info)
+      with torch/__init__ not loading (torch.__file__=None, torch.nn.DataParallel missing),
+      and torchaudio still the CUDA build (OSError: libtorch_cuda.so: cannot open shared
+      object file). Every torch/speechbrain service crash-looped on import: pipeline_api
+      (8000) + streaming_api (8002) DOWN (NRestarts 80/77), denoiser (8405) 500. Audio
+      recording/processing was broken — and ~38% of all sessions are status='failed' as a
+      result. NOT caused by application code; a venv/dependency state from a botched deploy.
+      Fix: remove torch + BOTH dist-infos, reinstall torch==2.8.0+cpu AND torchaudio==2.8.0+cpu
+      (matching variants) from https://download.pytorch.org/whl/cpu, restart the 3 services.
+      PERMANENT fix (PR #862): pin torch/torchaudio to a pytorch-cpu index in pyproject +
+      regenerate the lock, so a fresh `uv sync` reproduces +cpu instead of pulling CUDA.
+    lint:
+      - rule: TORCH_PINNED_TO_CPU_INDEX
+        pattern: 'index = "pytorch-cpu"'
+        message: "pyproject.toml must keep torch/torchaudio pinned to the pytorch-cpu index (the deploy host has no GPU). Drop it and `uv sync` resolves the PyPI CUDA build → libtorch_cuda.so missing → torch/speechbrain services crash-loop. Inverted-intent: this match IS the healthy state."
+        file_types: [".toml"]
+    chaos:
+      runner: null   # venv-state guard, not a code path; the import check + parity gate ARE the detector.
+      description: |
+        Whenever torch is touched (any CPU/CUDA migration or uv sync), run the import
+        check below + klik-deploy-parity. A mismatched torch/torchaudio variant or a
+        dist-info collision reproduces the crash on the next service restart.
+    observable_signal: |
+      ssh gcp "/opt/Klik/.venv/bin/python -c 'import torch, torchaudio; from torch.nn import DataParallel; print(torch.__version__, torchaudio.__version__, torch.__file__ is not None)'"
+      => prints matching versions (e.g. 2.8.0+cpu 2.8.0+cpu True). ImportError / OSError(libtorch_cuda.so)
+      / torch.__file__=None => the breakage is back. Also: exactly ONE torch-*.dist-info under
+      site-packages (two = the collision), and klik-deploy-parity => pipeline_api/streaming_api listening.
+
+  - id: BUG-2026-06-02-C
+    title: channel members panel showed a raw uuid for a co-member's PRIVATE owlbot (client resolved names from own+org agents only)
+    date: 2026-06-02
+    surface: backend
+    source_files:
+      - owl-backend/src/routes/channels.ts
+      - owl-agent/apps/owlspace/src/renderer/pages/channels/MembersPanel.tsx
+    user_visible_symptom: |
+      In a shared channel, a member that was another co-member's PRIVATE owlbot
+      (e.g. Mint in a reach: channel) rendered as a short uuid like "c3811e18…"
+      instead of "Mint @mint", while org-visible owlbots (Default) rendered fine.
+      Root cause: GET /v1/channels/:id/members returned raw {agent_id,user_id} and
+      MembersPanel resolved names only from the viewer's OWN (/v1/agents?owner=me)
+      + org-visible (?owner=org) agents — a private owlbot owned by someone else is
+      in neither, so it fell back to shortId(uuid). Fix: the endpoint LEFT JOINs
+      agents+users and returns agent_slug/agent_display_name + user_* per member;
+      the panel prefers those. Co-members may see each other's names (no leak).
+    lint:
+      pattern: 'agent_display_name'
+      path: owl-backend/src/routes/channels.ts
+      description: GET /v1/channels/:id/members must resolve display names server-side (LEFT JOIN agents/users → agent_slug/agent_display_name/user_*) so the client can render members it doesn't own. Match count must be >= 1.
+    chaos:
+      runner: null
+    observable_signal: |
+      GET /v1/channels/:id/members on a channel containing a private owlbot returns
+      that member row with a non-null agent_slug + agent_display_name. Null name on a
+      present agent_id => the raw-uuid regression is back.
+
+  - id: BUG-2026-06-02-D
+    title: owl-backend deploy aborted before restart — release prune ran as owlspace, can't rm CI(wilsonxu)-owned dirs
+    date: 2026-06-02
+    surface: backend
+    source_files:
+      - owl-backend/.github/workflows/deploy.yml
+    user_visible_symptom: |
+      A pushed owl-backend change "deployed" (CI red) but the running service kept
+      serving OLD code. The deploy's atomic symlink swap succeeded, but post-deploy
+      pruned old releases AS owlspace via `rm -rf`, and the CI-created release dirs
+      are owned wilsonxu:owlspace mode drwxr-sr-x (group not writable) → "Permission
+      denied". Under `set -euo pipefail` that aborted the remote script BEFORE
+      `systemctl restart owl-backend`, so swapped-in code never loaded (needed a
+      manual restart). Triggered the first time a 6th release existed (nothing to
+      prune before). Fix: prune in the wilsonxu ssh step (owns the dirs), run
+      migrate inline; stop using the VM post-deploy script.
+    lint:
+      pattern: 'Prune old releases AS wilsonxu'
+      path: owl-backend/.github/workflows/deploy.yml
+      description: deploy.yml must prune releases as the ssh user (wilsonxu, who owns them), not via owlspace — else rm fails and aborts before the restart. Keep prune BEFORE the systemctl restart in the same ssh step. Match count must be >= 1.
+    chaos:
+      runner: null
+    observable_signal: |
+      After a push to owl-backend main, `gh run list --branch main` shows the deploy
+      run conclusion=success, and the live API reflects the new code without a manual
+      `systemctl restart owl-backend`. A red deploy whose log shows "rm: cannot remove
+      .../releases/...: Permission denied" => the regression is back.
