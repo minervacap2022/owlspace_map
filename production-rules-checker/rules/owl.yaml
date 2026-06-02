@@ -1,0 +1,93 @@
+# Owl (Owlspace) production rules — DATA for the generic engine.
+# Stack: TypeScript monorepo (pnpm + Vite + bun). GROUNDED in Owlspace_re
+# CLAUDE.md / AGENTS.md + owl-backend src/env.ts + universal hygiene, and
+# false-positive-checked against 1828 real Owl files (secret/mock = 0 FP).
+# STARTER, not a ratified Owl spec — calibrate with the Owl owners. Note:
+# OWL_NO_SILENT_CATCH matches ~97 EXISTING .catch(()=>{}) / empty catch — the
+# gate only blocks NEW ones on changed files, but decide if that's Owl's policy.
+# Run: validate_production_rules.py --project owl <files...>
+# Owl REGRESSION lints live in the shared bug-regression-catalog (project: owl).
+global_excludes:
+- node_modules
+- /dist/
+- /build/
+- .d.ts
+- pnpm-lock.yaml
+- bun.lock
+- eslint.config
+rules:
+  OWL_NO_HARDCODED_SECRET:
+    file_types:
+    - .ts
+    - .tsx
+    exclude_files: &id001
+    - .test.
+    - .spec.
+    - __tests__/
+    - e2e/
+    - /fixtures/
+    - /mocks/
+    - .stories.
+    patterns:
+    - pattern: (?:const|let|var)\s+\w*(?:API_KEY|SECRET|TOKEN|PASSWORD|APIKEY)\w*\s*=\s*["\'](?!https?://|/)[A-Za-z0-9+/_=\-]{16,}["\']
+      message: hardcoded secret literal — load from validated env (owl-backend src/env.ts), never inline
+  OWL_NO_HARDCODED_ENDPOINT:
+    file_types:
+    - .ts
+    - .tsx
+    exclude_files:
+    - .test.
+    - .spec.
+    - __tests__/
+    - e2e/
+    - /fixtures/
+    - /mocks/
+    - .stories.
+    - env.ts
+    - .config.
+    - config.ts
+    patterns:
+    - pattern: '["\'']https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+      message: hardcoded IP URL — provider/backend traffic goes through env (ANTHROPIC_BASE_URL / OWL_BACKEND_ORIGIN), not a baked-in IP
+  OWL_NO_SILENT_CATCH:
+    file_types:
+    - .ts
+    - .tsx
+    exclude_files:
+    - .test.
+    - .spec.
+    - __tests__/
+    - e2e/
+    - /fixtures/
+    - /mocks/
+    - .stories.
+    - scripts/
+    patterns:
+    - pattern: catch\s*(?:\([^)]*\))?\s*\{\s*\}
+      message: 'empty catch {} — handle or rethrow; never silently swallow (Owl: surface, don''t enforce-by-omission)'
+    - pattern: \.catch\s*\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)
+      message: no-op .catch(() => {}) — handle the rejection, don't swallow it
+  OWL_NO_MOCK_DATA:
+    file_types:
+    - .ts
+    - .tsx
+    exclude_files:
+    - .test.
+    - .spec.
+    - __tests__/
+    - e2e/
+    - /fixtures/
+    - /mocks/
+    - .stories.
+    - playground/
+    patterns:
+    - pattern: (?:const|let|var)\s+(?:mock|fake|dummy|sample)\w*[_]?[Dd]ata\b\s*=
+      message: mock/fake/dummy data in production code — use real data
+  OWL_NO_BROKEN_CHAIN:
+    file_types:
+    - .ts
+    - .tsx
+    exclude_files: *id001
+    patterns:
+    - pattern: throw new Error\(\s*["\'](?:not implemented|unimplemented|TODO)
+      message: not-implemented throw in production — implement before shipping

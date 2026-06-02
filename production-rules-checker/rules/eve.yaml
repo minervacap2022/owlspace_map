@@ -1,0 +1,56 @@
+# EVE production rules — DATA for the generic engine.
+# Stack: Python trading system. STARTER / UNVERIFIED: EVE's repo (/opt/eve) is
+# not on this machine, so these were NOT false-positive-checked against its code.
+# Universal Python + trading-safety hygiene only, grounded in the catalog's EVE
+# conventions. Ratify against EVE's own standards + run a FP pass before trusting.
+# Run: validate_production_rules.py --project eve <files...>
+# EVE REGRESSION lints live in the shared bug-regression-catalog (project: eve).
+global_excludes:
+- __pycache__
+- .venv/
+- /migrations/
+rules:
+  EVE_NO_HARDCODED_SECRET:
+    file_types:
+    - .py
+    exclude_files: &id001
+    - test_
+    - _test.py
+    - tests/
+    - conftest.py
+    - /fixtures/
+    patterns:
+    - pattern: \b\w*(?:API_KEY|SECRET|TOKEN|PASSWORD|APIKEY|ACCESS_KEY)\w*\s*=\s*["\'][^"\']{12,}["\']
+      message: hardcoded broker/API secret — load from config/env, never inline (live-trading credential)
+  EVE_NO_SILENT_EXCEPT:
+    file_types:
+    - .py
+    exclude_files: *id001
+    patterns:
+    - pattern: '^\s*except\s*:'
+      message: bare except — a trading path must never blanket-swallow; catch specific exceptions and handle/raise
+    - pattern: except[^\n:]*:\s*pass\s*$
+      message: 'except ...: pass — swallowing an error in a trading path hides fills/rejects; handle or re-raise'
+  EVE_NO_MOCK_MARKET_DATA:
+    file_types:
+    - .py
+    exclude_files:
+    - test_
+    - _test.py
+    - tests/
+    - conftest.py
+    - /fixtures/
+    - backtest
+    - sim
+    patterns:
+    - pattern: \b(?:mock|fake|dummy|stub)_\w*(?:price|quote|fill|order|bar|tick|market|position)\w*\s*=
+      message: mock/fake market data in a live path — use real feed data (keep simulated data in backtest/sim only)
+  EVE_NO_BROKEN_CHAIN:
+    file_types:
+    - .py
+    exclude_files: *id001
+    patterns:
+    - pattern: \braise\s+NotImplementedError
+      message: NotImplementedError in production trading code — implement before shipping
+    - pattern: \bTODO\s*\(\s*\)
+      message: empty TODO() — will crash at runtime, implement the logic
