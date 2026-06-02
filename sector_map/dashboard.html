@@ -167,9 +167,12 @@ async function load(){
 }
 function render(g){
   document.getElementById("repo").textContent=g.repo;
+  const cr=g.call_resolution||'heuristic';
+  const crc=cr.startsWith('scip')?'var(--green)':cr.startsWith('graphify')?'var(--purple)':'var(--mut)';
   document.getElementById("meta").innerHTML=
     `${g.sectors.length} sectors · ${g.edges.filter(e=>e.kind==='depends_on').length} hard deps · `+
-    `<span class="mono">${esc(g.remote||'')}</span> · generated ${esc(g.generated_at)}`;
+    `${(g.symbols||[]).length} symbols · calls: <b style="color:${crc}">${esc(cr)}</b> · `+
+    `<span class="mono">${esc(g.remote||'')}</span> · ${esc(g.generated_at)}`;
   renderGraph(g); renderPicker(g); renderCards(g);
 }
 

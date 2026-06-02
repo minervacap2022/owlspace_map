@@ -22,6 +22,7 @@ SKIP = {".git", "__pycache__", "node_modules", "build", "dist", "DerivedData", "
 # Set in main() from env/args. Default: map owlspace_map (this repo).
 REPO = HERE.parent
 PROFILE = None
+CALL_GRAPH = None  # override the call-graph provider (e.g. "graphify")
 WATCH = HERE.parent          # the subtree the watcher polls (src dir for big repos)
 _VERSION = 0                 # bumped by the watcher whenever WATCH changes
 
@@ -72,8 +73,12 @@ class Handler(BaseHTTPRequestHandler):
             html = (HERE / "dashboard.html").read_bytes()
             self._send(200, "text/html; charset=utf-8", html)
         elif self.path.startswith("/api/graph"):
-            from extract import build_graph
-            body = json.dumps(build_graph(REPO, PROFILE)).encode()
+            from extract import build_graph, default_profile
+            prof = PROFILE
+            if CALL_GRAPH:  # inject the chosen call-graph provider
+                prof = dict(PROFILE or default_profile(REPO))
+                prof["call_graph"] = CALL_GRAPH
+            body = json.dumps(build_graph(REPO, prof)).encode()
             self._send(200, "application/json", body, {"Cache-Control": "no-store"})
         elif self.path.startswith("/api/events"):
             self._sse()
@@ -102,11 +107,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global REPO, PROFILE, WATCH
+    global REPO, PROFILE, WATCH, CALL_GRAPH
     port = 8765
     a = sys.argv
     if "--port" in a:
         port = int(a[a.index("--port") + 1])
+    if "--call-graph" in a:
+        CALL_GRAPH = a[a.index("--call-graph") + 1]
     if "--repo" in a:
         REPO = Path(a[a.index("--repo") + 1]).resolve()
         WATCH = REPO
