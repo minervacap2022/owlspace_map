@@ -1897,3 +1897,31 @@ bugs:
       empty, and the assertion fails. Equivalently: build_graph on any dotted-import
       Python repo must emit kind "depends_on" (not "references") for a cross-sector
       import.
+
+  - id: BUG-2026-06-03-461e97
+    title: catalog lint with a pattern but wrong key-shape routes to NO enforcement path — a lying guard (15 pre-existing found); add loader invariant + chaos ratchet
+    date: 2026-06-03
+    surface: tooling-ci
+    source_files:
+      - bug-regression-catalog/scripts/load_catalog.py
+      - bug-regression-catalog/scripts/test_load_catalog.py
+      - bug-regression-catalog/scripts/chaos/catalog_no_lying_guards.sh
+    user_visible_symptom: |
+      A catalog entry whose `lint` carries a `pattern` but the wrong key shape is
+      silently enforced NOWHERE — it LOOKS like a regression guard but provides zero
+      coverage. lint_patterns() (the forbidden path) needs rule+pattern+message;
+      required_guards() loads ONLY entries with an explicit `presence: required` and
+      never infers. So a lint with {pattern, path, description} and no rule (exactly
+      the 403 entry BUG-2026-06-03-6f9f53 before its fix), OR a MUST_/HAS_ rule that
+      omits `presence: required`, routes to neither. The new invariant found 15 such
+      pre-existing lying guards across backend/firmware/owlspace entries.
+    chaos:
+      runner: chaos/catalog_no_lying_guards.sh
+      description: Runs the loader invariant test_every_pattern_bearing_lint_is_actually_enforced; fails if any catalog lint with a pattern routes to neither enforcement path beyond the tracked KNOWN_UNENFORCED baseline (which may only shrink).
+    observable_signal: |
+      python3 bug-regression-catalog/scripts/test_load_catalog.py
+      CatalogLoaderInvariants.test_every_pattern_bearing_lint_is_actually_enforced
+      A NEW lint-with-pattern that routes nowhere — or a baselined id in
+      KNOWN_UNENFORCED that has since been fixed/removed (staleness) — turns the
+      loader suite red. chaos/catalog_no_lying_guards.sh wraps the same check for
+      /full-stack-test phase 21.

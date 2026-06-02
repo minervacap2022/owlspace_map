@@ -16,8 +16,23 @@ import unittest
 
 from load_catalog import (
     load, lint_patterns, required_guards,
-    _globs_of, _lint_project,
+    _globs_of, _lint_project, _intent,
 )
+
+# Lying guards that PRE-DATE the routing invariant below: each has a `pattern` but
+# is enforced NOWHERE — either no rule+message (so not a forbidden lint), or a
+# MUST_/HAS_ rule lacking the explicit `presence: required` (so required_guards()
+# won't load it; it never infers, by design). Tracked tech-debt, NOT acceptable
+# long-term. This set may only SHRINK: to fix one, add `presence: required` (and
+# verify the pattern matches its target file so the guard doesn't false-fail) or
+# rule+message, then delete its id here. See BUG-2026-06-03-461e97.
+KNOWN_UNENFORCED = frozenset({
+    "BUG-2026-05-29-B", "BUG-2026-05-29-D", "BUG-2026-05-29-M",
+    "BUG-2026-06-01-E", "BUG-2026-06-02-9c936c", "BUG-2026-06-02-B",
+    "BUG-2026-06-02-C", "BUG-2026-06-02-D", "BUG-2026-06-02-E",
+    "BUG-2026-06-02-F", "BUG-2026-06-02-H", "BUG-2026-06-02-I",
+    "BUG-2026-06-02-J", "BUG-2026-06-02-K", "BUG-2026-06-02-a79689",
+})
 
 
 class CatalogLoaderInvariants(unittest.TestCase):
@@ -60,6 +75,32 @@ class CatalogLoaderInvariants(unittest.TestCase):
                 if _lint_project(_globs_of(entry), bug.get("source_files")) == "unknown":
                     unknown.append((bug["id"], entry["rule"]))
         self.assertEqual(unknown, [], f"lints with no derivable project (silently dropped under filter): {unknown}")
+
+    def test_every_pattern_bearing_lint_is_actually_enforced(self):
+        # The THIRD loader meta-bug: a lint that HAS a `pattern` but the wrong key
+        # shape routes to NEITHER lint_patterns() (forbidden) NOR required_guards()
+        # (presence:required) — a LYING GUARD, enforced nowhere, silently. (Exactly
+        # what the BUG-2026-06-03-6f9f53 403 entry was before it was fixed.)
+        # This invariant exposed 15 PRE-EXISTING lying guards (see KNOWN_UNENFORCED):
+        # a ratchet — the baseline may only SHRINK; a NEW one (or a stale id) fails.
+        nowhere = set()
+        for bug in load():
+            lint = bug.get("lint")
+            for entry in (lint if isinstance(lint, list) else [lint]) if lint else []:
+                if not (isinstance(entry, dict) and entry.get("pattern")):
+                    continue
+                forbidden_ok = (all(k in entry for k in ("rule", "pattern", "message"))
+                                and _intent(entry) == "forbidden")
+                required_ok = (entry.get("presence") == "required"
+                               and entry.get("rule") and _globs_of(entry))
+                if not (forbidden_ok or required_ok):
+                    nowhere.add(bug["id"])
+        new = nowhere - KNOWN_UNENFORCED
+        self.assertEqual(new, set(), f"NEW lying guard(s) — a lint has a pattern but is enforced NOWHERE; "
+                                     f"add `presence: required` or rule+message: {sorted(new)}")
+        stale = KNOWN_UNENFORCED - nowhere
+        self.assertEqual(stale, set(), f"baseline is STALE — these are now enforced (or removed); "
+                                       f"delete them from KNOWN_UNENFORCED so the ratchet tightens: {sorted(stale)}")
 
     def test_project_filter_keeps_klik_drops_foreign(self):
         klik_req = {r for r, *_ in required_guards({"klik"})}
