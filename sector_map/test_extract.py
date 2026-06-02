@@ -202,5 +202,33 @@ class SelfMap(unittest.TestCase):
             self.assertEqual(set(s["dimensions"]) & seven, seven, f"{s['id']} missing a dimension")
 
 
+class DominantLang(unittest.TestCase):
+    """default_profile auto-detects the dominant language → right lang + resolve mode,
+    so a fresh non-Python repo gets real cross-sector edges with zero config."""
+
+    def test_python_repo_stays_py_stem(self):
+        d = _write({"core/m.py": "def f(): pass", "api/s.py": "x = 1"})
+        p = extract.default_profile(d)
+        self.assertEqual((p["lang"], p["resolve"]), ("py", "py_stem"))
+
+    def test_go_repo_detected_and_cross_sector_edge_resolves(self):
+        d = _write({
+            "core/m.go": "package core\nfunc New() {}",
+            "ui/v.go": 'package ui\nimport "svc/core"\nfunc V() { core.New() }',
+        })
+        p = extract.default_profile(d)
+        self.assertEqual(p["lang"], "go")
+        self.assertEqual(p["resolve"], "kt_pkg")
+        self.assertIn(("ui", "core"), _dep_edges(extract.build_graph(d, p)),
+                      "Go import must resolve ui→core with zero config")
+
+    def test_typescript_repo_detected_and_relative_edge_resolves(self):
+        d = _write({"core/t.ts": "export class T{}", "core/u.ts": "export class U{}",
+                    "ui/v.ts": 'import {T} from "../core/t"; export function v(){}'})
+        p = extract.default_profile(d)
+        self.assertEqual(p["lang"], "ts")
+        self.assertIn(("ui", "core"), _dep_edges(extract.build_graph(d, p)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

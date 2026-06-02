@@ -486,12 +486,39 @@ def _deploy_symlinks(sector: str, repo: Path) -> list[str]:
 
 
 # ── default profile (owlspace_map: top-level dirs, Python) ────────────────────
+# suffix → the short `lang` code a profile uses (NOT the tree-sitter grammar name).
+_LANG_BY_SUFFIX = {
+    ".py": "py", ".kt": "kt", ".kts": "kt", ".java": "java", ".go": "go",
+    ".ts": "ts", ".tsx": "ts", ".js": "js", ".jsx": "js", ".mjs": "js",
+    ".rs": "rust", ".rb": "ruby", ".c": "c", ".h": "c", ".cc": "cpp",
+    ".cpp": "cpp", ".hpp": "cpp", ".swift": "swift", ".php": "php",
+}
+
+
+def _dominant_lang(repo: Path) -> str:
+    """The most common source language in the repo → picks lang + resolve mode.
+    Bounded walk (skips SKIP_DIRS / dotdirs) so big repos stay fast."""
+    counts: dict[str, int] = {}
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        for f in files:
+            lang = _LANG_BY_SUFFIX.get(Path(f).suffix)
+            if lang:
+                counts[lang] = counts.get(lang, 0) + 1
+    return max(counts, key=counts.get) if counts else "py"
+
+
 def default_profile(repo: Path) -> dict:
     sectors = [{"id": p.name, "root": p.name}
                for p in sorted(repo.iterdir())
                if p.is_dir() and p.name not in SKIP_DIRS and not p.name.startswith(".")]
-    return {"label": repo.name, "lang": "py", "git_root": ".", "src_base": "",
-            "test_base": "", "import_prefix": "", "resolve": "py_stem",
+    lang = _dominant_lang(repo)
+    # py uses flat-stem/package matching; every other language uses package/sector-name
+    # matching (kt_pkg). Relative imports (JS/TS ./, C/C++ #include) resolve automatically
+    # regardless of mode. Set import_prefix in a tuned profile for precise package edges.
+    resolve = "py_stem" if lang == "py" else "kt_pkg"
+    return {"label": repo.name, "lang": lang, "git_root": ".", "src_base": "",
+            "test_base": "", "import_prefix": "", "resolve": resolve,
             "behavior": GUARD_SIGNS, "catalog_project": None, "sectors": sectors,
             "boundaries_global": [], "boundaries_by_sector": {}, "deploy_symlinks": True,
             "scip_index": "index.scip" if (repo / "index.scip").exists() else None, "scip_root": "."}
@@ -607,6 +634,11 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         for sid, root in roots:
             if p == root or p.startswith(root + "/"):
                 return sid
+        if not prefix_norm:                        # generic mode (no import_prefix set):
+            last = p.rsplit("/", 1)[-1]            # a Go/Java package import's trailing
+            for sid, root in roots:                # component is the sector dir (e.g. "svc/core")
+                if root == last:
+                    return sid
         return None
 
     hard: dict[tuple[str, str], int] = {}
