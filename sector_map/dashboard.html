@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sector map · owlspace_map</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#0f141b; --line:#30363d; --line2:#21262d;
+    --ink:#e6edf3; --mut:#8b949e; --dim:#6e7681;
+    --green:#3fb950; --red:#f85149; --amber:#d29922; --blue:#58a6ff; --purple:#bc8cff;
+    --chip:#1f2630;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+  a{color:var(--blue);text-decoration:none}
+  header{position:sticky;top:0;z-index:5;background:linear-gradient(#0d1117,#0d1117f0);
+    border-bottom:1px solid var(--line);padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px}
+  header h1 .em{color:var(--purple)}
+  .meta{color:var(--mut);font-size:12px}
+  .live{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mut)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);box-shadow:0 0 0 0 #0000}
+  .dot.on{background:var(--green);animation:pulse 1.8s infinite}
+  .dot.off{background:var(--amber)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 #3fb95066}70%{box-shadow:0 0 0 7px #3fb95000}100%{box-shadow:0 0 0 0 #3fb95000}}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px 22px 60px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:2px 0 18px}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block;vertical-align:middle;margin-right:5px}
+  .grid2{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;margin-bottom:22px}
+  @media(max-width:980px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .card>.hd{padding:11px 15px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:10px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px}
+  svg{display:block;width:100%;height:340px;background:
+    radial-gradient(circle at 50% 40%, #11171f 0%, #0d1117 70%)}
+  .node{cursor:pointer}
+  .node circle{transition:.15s}
+  .node text{fill:var(--ink);font-size:12px;font-weight:600;pointer-events:none}
+  .node .sub{fill:var(--mut);font-size:10px;font-weight:400}
+  .edge{stroke:var(--line);fill:none}
+  .edge.dep{stroke:#3a4350;stroke-width:1.6}
+  .edge.ref{stroke:#262d36;stroke-dasharray:3 4;stroke-width:1.1}
+  .edge.hot{stroke:var(--red);stroke-width:2.4;opacity:.95}
+  .dim{opacity:.18}
+  /* keystone */
+  .key{padding:14px 15px}
+  .key select{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:inherit;font-size:13px}
+  .qrow{margin-top:12px}
+  .qrow .lbl{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{background:var(--chip);border:1px solid var(--line2);border-radius:999px;padding:2px 10px;font-size:12px;color:var(--ink)}
+  .chip.red{border-color:#5a2327;color:#ffb4ab;background:#2a1517}
+  .chip.green{border-color:#1f4023;color:#7ee787;background:#102516}
+  .chip.mut{color:var(--mut)}
+  /* sector cards */
+  h2.sec{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:1px;margin:26px 0 12px;border-bottom:1px solid var(--line2);padding-bottom:8px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px}
+  .sc{background:var(--panel);border:1px solid var(--line);border-radius:11px;scroll-margin-top:80px}
+  .sc.flash{animation:flash 1.1s}
+  @keyframes flash{0%{border-color:var(--blue);box-shadow:0 0 0 2px #58a6ff44}100%{border-color:var(--line)}}
+  .sc .top{padding:13px 15px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:9px}
+  .sc .top .name{font-size:15px;font-weight:700}
+  .sc .top .k{color:var(--dim);font-size:11px}
+  .badge{font-size:11px;padding:2px 9px;border-radius:999px;border:1px solid var(--line2)}
+  .badge.cov{color:#7ee787;border-color:#1f4023;background:#102516}
+  .badge.unc{color:#ffb4ab;border-color:#5a2327;background:#2a1517}
+  .badge.doc{color:var(--mut)}
+  .badge.blast{margin-left:auto;color:#ffd9a0;border-color:#5a4423;background:#241c0f}
+  .dimrow{padding:10px 15px;border-top:1px solid var(--line2);display:grid;grid-template-columns:118px 1fr;gap:10px}
+  .dimrow:first-of-type{border-top:0}
+  .dn{color:var(--mut);font-size:11px;display:flex;gap:7px;align-items:baseline}
+  .dn b{color:var(--dim);font-weight:700}
+  .dv{font-size:12.5px;min-width:0}
+  .dv .muted{color:var(--dim)}
+  .li{margin:1px 0;word-break:break-word}
+  details summary{cursor:pointer;color:var(--mut);font-size:12px}
+  code{background:#0b0f14;border:1px solid var(--line2);border-radius:4px;padding:0 4px;color:#c9d1d9}
+  .mono{color:var(--dim);font-size:11.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🗺 sector map · <span class="em" id="repo">…</span></h1>
+  <span class="meta" id="meta"></span>
+  <span class="live"><span class="dot" id="dot"></span><span id="livetxt">connecting…</span></span>
+</header>
+
+<div class="wrap">
+  <div class="legend">
+    <span><i style="background:var(--green)"></i>tested</span>
+    <span><i style="background:var(--red)"></i>uncovered code</span>
+    <span><i style="background:var(--dim)"></i>docs</span>
+    <span><i style="background:#3a4350"></i>depends&nbsp;on (import)</span>
+    <span><i style="background:#262d36"></i>references (prose)</span>
+    <span class="mut">— node size = blast radius · hover a node to see what it would break</span>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="hd">dependency graph · who breaks if this changes</div>
+      <svg id="graph" viewBox="0 0 720 340" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#3a4350"/></marker>
+          <marker id="arrhot" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#f85149"/></marker>
+        </defs>
+        <g id="edges"></g><g id="nodes"></g>
+      </svg>
+    </div>
+    <div class="card">
+      <div class="hd">keystone queries (the PRD's three)</div>
+      <div class="key">
+        <label class="mut" style="font-size:12px">sector&nbsp;
+          <select id="pick"></select></label>
+        <div class="qrow"><div class="lbl">blast radius — run these consumers' tests before & after</div>
+          <div class="chips" id="q-blast"></div></div>
+        <div class="qrow"><div class="lbl">consumers' tests to run</div>
+          <div class="chips" id="q-tests"></div></div>
+        <div class="qrow"><div class="lbl">uncovered surface (write a test FIRST if you touch these)</div>
+          <div class="chips" id="q-unc"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">sectors — all seven dimensions, live from the working dir</h2>
+  <div class="cards" id="cards"></div>
+</div>
+
+<script>
+const DIMS = [
+  ["1","structure"],["2","behavior"],["3","context"],["4","boundaries"],
+  ["5","intent & history"],["6","change-safety"],["7","tests & coverage"]
+];
+let GRAPH=null;
+
+const el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+const esc=s=>String(s).replace(/[&<>]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[m]));
+const chips=(arr,cls="")=>arr&&arr.length?arr.map(x=>`<span class="chip ${cls}">${esc(x)}</span>`).join(""):`<span class="chip mut">none</span>`;
+const colorOf=s=>{const t=s.dimensions.tests_coverage;return t.covered?"var(--green)":(s.kind==="docs"?"var(--dim)":"var(--red)");};
+
+async function load(){
+  const g=await (await fetch("/api/graph",{cache:"no-store"})).json();
+  GRAPH=g; render(g);
+}
+function render(g){
+  document.getElementById("repo").textContent=g.repo;
+  document.getElementById("meta").innerHTML=
+    `${g.sectors.length} sectors · ${g.edges.filter(e=>e.kind==='depends_on').length} hard deps · `+
+    `<span class="mono">${esc(g.remote||'')}</span> · generated ${esc(g.generated_at)}`;
+  renderGraph(g); renderPicker(g); renderCards(g);
+}
+
+function renderGraph(g){
+  const S=g.sectors, N=S.length, cx=360, cy=170, R=128;
+  const pos={};
+  S.forEach((s,i)=>{const a=-Math.PI/2+i*2*Math.PI/N;pos[s.id]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)};});
+  const E=document.getElementById("edges"), Nd=document.getElementById("nodes");
+  E.innerHTML="";Nd.innerHTML="";
+  g.edges.forEach(e=>{
+    const a=pos[e.src],b=pos[e.dst];if(!a||!b)return;
+    const p=document.createElementNS("http://www.w3.org/2000/svg","path");
+    const mx=(a.x+b.x)/2,my=(a.y+b.y)/2-18;
+    p.setAttribute("d",`M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`);
+    p.setAttribute("class","edge "+(e.kind==="depends_on"?"dep":"ref"));
+    if(e.kind==="depends_on")p.setAttribute("marker-end","url(#arr)");
+    p.dataset.src=e.src;p.dataset.dst=e.dst;p.dataset.kind=e.kind;
+    E.appendChild(p);
+  });
+  S.forEach(s=>{
+    const p=pos[s.id], blast=s.dimensions.change_safety.blast_count;
+    const r=12+Math.min(blast,4)*4;
+    const grp=document.createElementNS("http://www.w3.org/2000/svg","g");
+    grp.setAttribute("class","node");grp.setAttribute("transform",`translate(${p.x},${p.y})`);
+    grp.innerHTML=`<circle r="${r}" fill="${colorOf(s)}" fill-opacity=".22" stroke="${colorOf(s)}" stroke-width="1.8"/>`+
+      `<text text-anchor="middle" y="-${r+8}">${esc(s.id)}</text>`+
+      `<text text-anchor="middle" class="sub" y="-${r-4}">blast ${blast}</text>`;
+    grp.onmouseenter=()=>hot(s.id);grp.onmouseleave=()=>unhot();
+    grp.onclick=()=>{const c=document.getElementById("card-"+s.id);c.scrollIntoView({behavior:"smooth",block:"center"});c.classList.remove("flash");void c.offsetWidth;c.classList.add("flash");};
+    Nd.appendChild(grp);
+  });
+}
+function hot(id){
+  const s=GRAPH.sectors.find(x=>x.id===id);const blast=new Set(s.dimensions.change_safety.blast_radius);
+  const keep=new Set([id,...blast]);
+  document.querySelectorAll("#nodes .node").forEach(n=>{
+    const t=n.querySelector("text").textContent;n.classList.toggle("dim",!keep.has(t));});
+  document.querySelectorAll("#edges .edge").forEach(p=>{
+    const onPath=p.dataset.kind==="depends_on"&&keep.has(p.dataset.src)&&keep.has(p.dataset.dst)&&p.dataset.dst===id||(p.dataset.kind==="depends_on"&&blast.has(p.dataset.src));
+    p.classList.toggle("hot",!!onPath);if(onPath)p.setAttribute("marker-end","url(#arrhot)");
+    p.classList.toggle("dim",!(keep.has(p.dataset.src)&&keep.has(p.dataset.dst)));});
+}
+function unhot(){
+  document.querySelectorAll("#nodes .node,.edge").forEach(n=>n.classList.remove("dim"));
+  document.querySelectorAll("#edges .edge").forEach(p=>{p.classList.remove("hot");
+    if(p.dataset.kind==="depends_on")p.setAttribute("marker-end","url(#arr)");});
+}
+
+function renderPicker(g){
+  const sel=document.getElementById("pick");
+  sel.innerHTML=g.sectors.map(s=>`<option>${esc(s.id)}</option>`).join("");
+  sel.onchange=()=>keystone(sel.value);
+  keystone(g.sectors[0].id);
+}
+function keystone(id){
+  const s=GRAPH.sectors.find(x=>x.id===id),d=s.dimensions;
+  const blast=d.change_safety.blast_radius;
+  document.getElementById("q-blast").innerHTML=chips(blast.length?blast:["(leaf — nothing depends on it)"],blast.length?"":"mut");
+  const tests=[id,...blast].map(c=>{const cs=GRAPH.sectors.find(x=>x.id===c);
+    const tf=cs.dimensions.tests_coverage.test_files;
+    return tf.length?tf.map(t=>t.split("/").pop()):[`${c}: uncovered`];}).flat();
+  document.getElementById("q-tests").innerHTML=tests.map(t=>`<span class="chip ${/uncovered/.test(t)?'red':'green'}">${esc(t)}</span>`).join("");
+  const unc=d.tests_coverage.uncovered_surface;
+  document.getElementById("q-unc").innerHTML=chips(unc.length?unc:["✓ covered / no code"],unc.length?"red":"green");
+}
+
+function dval(name,d){
+  const D=d.dimensions;
+  if(name==="structure")return `<div class="li"><span class="muted">loc</span> ${D.structure.loc} · <span class="muted">files</span> ${d.file_count} · <span class="muted">symbols</span> ${D.structure.symbols.length}</div>`+
+    `<div class="li"><span class="muted">depends on</span> ${chips(D.structure.depends_on,"")}</div>`+
+    (D.structure.symbols.length?`<details><summary>${D.structure.symbols.length} public symbols</summary><div class="mono">${D.structure.symbols.map(esc).join("<br>")}</div></details>`:"");
+  if(name==="behavior")return D.behavior.invariants.length?D.behavior.invariants.map(i=>`<div class="li">✓ ${esc(i)}</div>`).join(""):`<span class="muted">no enforced invariants (docs)</span>`;
+  if(name==="context")return `<div class="li"><span class="muted">deploy</span> ${chips(D.context.deploy.map(x=>x.split(" → ")[0].replace(/^.*\/.claude/,"~/.claude").replace(/^.*\/.git-hooks/,"~/.git-hooks")))}</div>`+
+    `<div class="li"><span class="muted">deps</span> ${chips(D.context.deps)}</div>`;
+  if(name==="boundaries")return `<div class="li"><span class="muted">external</span> ${chips(D.boundaries.external.map(x=>x.replace(/^git remote → /,"git: ").replace(/^.*\/.claude/,"~/.claude").replace(/^.*\/.git-hooks/,"~/.git-hooks")))}</div>`+
+    (D.boundaries.cross_project.length?`<div class="li"><span class="muted">cross-project</span> ${chips(D.boundaries.cross_project)}</div>`:"");
+  if(name==="intent & history")return `<div class="li"><span class="muted">${D.intent_history.total_commits} commits</span></div>`+
+    D.intent_history.recent.map(c=>`<div class="li mono">${esc(c)}</div>`).join("");
+  if(name==="change-safety"){const cs=D.change_safety;return `<div class="li"><span class="muted">direct consumers (blast)</span> ${chips(cs.blast_radius.length?cs.blast_radius:["leaf — nothing imports it"],cs.blast_radius.length?"":"mut")}</div>`+
+    (cs.cycles&&cs.cycles.length?`<div class="li"><span class="muted">⚠ dependency cycle with</span> ${chips(cs.cycles,"red")}</div>`:"")+
+    `<div class="li"><span class="muted">observability</span> ${esc(cs.observability)}</div>`;}
+  if(name==="tests & coverage"){const t=D.tests_coverage;
+    return `<div class="li"><span class="muted">coverage</span> ${t.covered?`<span class="chip green">${esc(t.coverage_label)}</span>`:`<span class="chip ${t.uncovered_surface.length?'red':'mut'}">${esc(t.coverage_label)}</span>`}</div>`+
+      (t.test_files.length?`<div class="li mono">${t.test_files.map(esc).join("<br>")}</div>`:"")+
+      (t.uncovered_surface.length?`<details><summary class="" style="color:#ffb4ab">${t.uncovered_surface.length} uncovered symbols — test first</summary><div class="mono">${t.uncovered_surface.map(esc).join("<br>")}</div></details>`:"");
+  }
+  return "";
+}
+function renderCards(g){
+  const C=document.getElementById("cards");C.innerHTML="";
+  g.sectors.forEach(s=>{
+    const t=s.dimensions.tests_coverage, blast=s.dimensions.change_safety.blast_count;
+    const badge=t.covered?`<span class="badge cov">${esc(t.coverage_label)}</span>`
+      :(s.kind==="docs"?`<span class="badge doc">docs</span>`:`<span class="badge unc">uncovered</span>`);
+    const card=el("div","sc");card.id="card-"+s.id;
+    card.innerHTML=`<div class="top"><span class="name">${esc(s.id)}</span><span class="k">${esc(s.kind)}</span>${badge}`+
+      `<span class="badge blast">blast ${blast}</span></div>`+
+      DIMS.map(([n,name])=>`<div class="dimrow"><div class="dn"><b>${n}</b>${esc(name)}</div><div class="dv">${dval(name,s)}</div></div>`).join("");
+    C.appendChild(card);
+  });
+}
+
+// live updates
+function sse(){
+  const dot=document.getElementById("dot"),txt=document.getElementById("livetxt");
+  const es=new EventSource("/api/events");
+  let first=true;
+  es.onmessage=()=>{dot.className="dot on";txt.textContent="live";if(!first)load();first=false;};
+  es.onerror=()=>{dot.className="dot off";txt.textContent="reconnecting…";};
+}
+load();sse();
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "label": "Klik (Klik_one frontend · KMP/Kotlin)",
+  "lang": "kt",
+  "git_root": "Klik_one",
+  "src_base": "Klik_one/liquid/samples/composeApp/src/commonMain/kotlin/io/github/fletchmckee/liquid/samples/app",
+  "test_base": "Klik_one/liquid/samples/composeApp/src/commonTest/kotlin/io/github/fletchmckee/liquid/samples/app",
+  "import_prefix": "io.github.fletchmckee.liquid.samples.app.",
+  "resolve": "kt_pkg",
+  "catalog_project": "klik",
+  "deploy_symlinks": false,
+  "sectors": [
+    {"id": "domain", "root": "domain"},
+    {"id": "data", "root": "data"},
+    {"id": "ui/klikone", "root": "ui/klikone"},
+    {"id": "ui/components", "root": "ui/components"},
+    {"id": "ui/screens", "root": "ui/screens"},
+    {"id": "presentation", "root": "presentation"},
+    {"id": "platform", "root": "platform"},
+    {"id": "theme", "root": "theme"},
+    {"id": "logging", "root": "logging"},
+    {"id": "core", "root": "core"}
+  ],
+  "behavior": [
+    ["k1Clickable", "K1: clickable surfaces use Modifier.k1Clickable (kills the gray ripple)"],
+    ["KlikInk|KlikPaper|K1Type|KlikLine|K1R\\.", "K1 paper-and-ink tokens (not MaterialTheme.colorScheme/typography)"],
+    ["material3", "⚠ Material3 reference (forbidden in ui/klikone — k1-guards blocks it)"],
+    ["encodeDefaults\\s*=\\s*false", "encodeDefaults=false — required wire fields must be non-default (the 403 landmine)"],
+    ["@Serializable", "@Serializable wire DTO contract"],
+    ["expect (fun|class|object)|actual (fun|class|object)", "expect/actual platform contract (iOS↔Android)"],
+    ["Canvas\\(", "fixed-size Canvas glyphs (K1 waveform/sparkle must be width+height sized)"],
+    ["Modifier\\.clickable", "⚠ raw Modifier.clickable (should be k1Clickable in ui/klikone)"]
+  ],
+  "boundaries_global": [
+    "Android mirror: Klik_newandroid (sibling fork — every invariant enforced twice or it drifts)",
+    "iOS native: iosMain bridges (Keychain, AVFoundation, Apple Sign-In)"
+  ],
+  "boundaries_by_sector": {
+    "data": ["backend API (Environment-configured): 8004 main · 8833 auth · 8333 askklik · 8341 notif · 8002 streaming"],
+    "platform": ["iosMain / androidMain actual implementations; SHA-256 SPKI pinning on iOS"]
+  }
+}
