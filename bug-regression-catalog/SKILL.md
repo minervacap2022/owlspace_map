@@ -37,9 +37,12 @@ One file. Three consumers. Zero duplication.
    - **Behavioral** — only manifests when something upstream fails? → write a chaos runner under `scripts/chaos/<id>.sh`.
    - **Both** (most cases) — fill both.
 
-2. Append to `catalog.yaml`:
+2. **Mint a collision-free id** — `python3 scripts/new_bug_id.py` (prints
+   `BUG-<date>-<rand>`). It's **random, not sequential** — never hand-pick the
+   "next letter": sequential ids collide when agents append concurrently (both
+   read the same catalog and pick the same letter). Then append to `catalog.yaml`:
    ```yaml
-   - id: BUG-YYYY-MM-DD-X
+   - id: BUG-YYYY-MM-DD-xxxxxx     # from scripts/new_bug_id.py — do not hand-pick
      title: One-line summary
      date: YYYY-MM-DD
      surface: backend | ios | frontend

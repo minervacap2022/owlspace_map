@@ -30,6 +30,18 @@ class CatalogLoaderInvariants(unittest.TestCase):
         dups = sorted({i for i in ids if ids.count(i) > 1})
         self.assertEqual(dups, [], f"duplicate catalog ids (the single key): {dups}")
 
+    def test_minted_ids_are_unique_and_well_formed(self):
+        # new_bug_id.py must mint collision-free ids (random, not sequential) so
+        # concurrent appenders never need to coordinate. Prove: well-formed, never
+        # collides with an existing id, and 200 draws are all distinct.
+        from new_bug_id import mint, _existing_ids
+        existing = _existing_ids()
+        minted = {mint("2026-06-02") for _ in range(200)}
+        self.assertEqual(len(minted), 200, "minted ids collided with each other")
+        self.assertTrue(minted.isdisjoint(existing), "a minted id already exists in the catalog")
+        for bid in minted:
+            self.assertRegex(bid, r"^BUG-2026-06-02-[0-9a-f]{6}$", f"malformed minted id: {bid}")
+
     def test_forbidden_lints_load_nonzero(self):
         # The original silent-crash returned 0 here while the catalog looked fine.
         self.assertGreater(len(lint_patterns()), 0, "0 forbidden lints — loader is lying green")
