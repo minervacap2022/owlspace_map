@@ -27,10 +27,11 @@ from typing import Optional
 
 
 def _project_filter():
-    """Projects to load catalog lints for, from `--project X` (repeatable, or
-    `--project=X`). None = all projects (backward-compatible default). The Klik
-    `/production-rules-checker` passes `--project klik` so EVE/Owl/owl-backend
-    lints never load into the Klik gate."""
+    """Projects to load rules + catalog lints for, from `--project X` (repeatable,
+    or `--project=X`). None = no project rules + all catalog lints (backward-
+    compatible default). `--project <name>` loads only that project's rules
+    (`rules/<name>.yaml`) and its catalog lints, so one project's rule can never
+    fire on another project's file."""
     projs = set()
     argv = sys.argv
     for i, a in enumerate(argv):
@@ -56,227 +57,10 @@ class ValidationResult:
     files_checked: int = 0
 
 
-# Files/patterns to always exclude from validation
-GLOBAL_EXCLUDES = [
-    "validate_production_rules.py",  # This script contains patterns
-    "CLAUDE.md",  # Documentation may contain anti-pattern examples
-    "full_rules.md",  # Reference doc contains anti-pattern examples
-]
-
-
-# Patterns for each rule category
-RULES = {
-    # === RULE 14: ERROR CODE & WIRE FORMAT COMPLIANCE ===
-    # All error responses must use the KLIK 5-char error code + wire format.
-    # Registry: docs/error-codes.md | Base: KLIK 错误码注册表
-    "ERROR_CODE_COMPLIANCE": {
-        "patterns": [
-            # Plain-string HTTPException detail bypasses the wire format entirely
-            (
-                r'raise\s+HTTPException\s*\(\s*status_code\s*=\s*\d+\s*,\s*detail\s*=\s*["\']',
-                'HTTPException with plain string detail — wrap in error object: '
-                'JSONResponse(content={"error":{"error_code":"Xxxxx","error_message":"...","user_tip":"...","stack_trace":""}})',
-            ),
-            # error_code values that don't match <Source><CC><SS> format
-            (
-                r'"error_code"\s*:\s*"(?![ABC]\d{4})',
-                "error_code does not match <Source><CC><SS> 5-char format (e.g. A0101) — register in docs/error-codes.md first",
-            ),
-            # Ad-hoc shorthand error strings used as error codes
-            (
-                r'"error"\s*:\s*"[a-z_]{3,}(?:_error|_failed|_invalid)"',
-                "ad-hoc error string — use registered 5-char error_code in KLIK wire format instead",
-            ),
-        ],
-        "file_types": [".py"],
-        "exclude_files": ["test_", "_test.py", "tests/", "conftest.py", "validate_production_rules.py"],
-    },
-    # === RULE 15: STACK TRACE DISCIPLINE ===
-    # stack_trace must only be populated for B02xx (internal/panic) error codes.
-    "STACK_TRACE_DISCIPLINE": {
-        "patterns": [
-            # stack_trace filled via traceback.format_exc() or sys.exc_info()
-            (
-                r'"stack_trace"\s*:\s*traceback',
-                "stack_trace filled outside B02xx — only B02xx (internal/panic) may populate stack_trace; set \"\" for all other codes",
-            ),
-            (
-                r'"stack_trace"\s*:\s*format_exc',
-                "stack_trace filled outside B02xx — only B02xx (internal/panic) may populate stack_trace; set \"\" for all other codes",
-            ),
-        ],
-        "file_types": [".py"],
-        "exclude_files": ["test_", "_test.py", "tests/", "conftest.py"],
-    },
-    # === RULE 14 (Kotlin): ERROR CODE & WIRE FORMAT COMPLIANCE ===
-    "KT_ERROR_CODE_COMPLIANCE": {
-        "patterns": [
-            # Any hardcoded non-5-char error code string in Kotlin responses
-            (
-                r'"error_code"\s*:\s*"(?![ABC]\d{4})',
-                "error_code does not match <Source><CC><SS> 5-char format — register in docs/error-codes.md first",
-            ),
-        ],
-        "file_types": [".kt"],
-        "exclude_files": ["test/", "Test.kt", "androidTest/"],
-    },
-    # === EXISTING RULES (Python) ===
-    "NO_FALLBACKS": {
-        "patterns": [
-            (r'os\.getenv\s*\(\s*["\'][^"\']+["\']\s*,', "os.getenv with default value - use os.environ[] to fail explicitly"),
-            (r'os\.environ\.get\s*\(\s*["\'][^"\']+["\']\s*,', "os.environ.get with default value - use os.environ[] to fail explicitly"),
-            (r"except\s*:\s*\n\s*pass", "silent exception swallowing - handle or re-raise"),
-            (r"_fallback\s*=", "fallback variable - fail explicitly instead"),
-            (r"_default\s*=", "default variable - fail explicitly instead"),
-            (r"_graceful", "graceful degradation - fail explicitly instead"),
-        ],
-        "file_types": [".py"],
-    },
-    "NO_HARDCODED_PATHS": {
-        "patterns": [
-            (r'["\']/root/', "hardcoded /root path - use env vars or config"),
-            (r'["\']/home/\w+', "hardcoded /home path - use env vars or config"),
-            (r'["\']localhost["\']', "hardcoded localhost - use config"),
-            (r'(?<!_LOOPBACK_HOST = )["\']127\.0\.0\.1["\'](?!.*# noqa)', "hardcoded 127.0.0.1 - use config"),
-        ],
-        "file_types": [".py", ".sh", ".bash", ".yaml", ".yml"],
-    },
-    "NO_MOCK_DATA": {
-        "patterns": [
-            (r"mock_data\s*=", "mock data in production code"),
-            (r"fake_\w+\s*=", "fake data in production code"),
-            (r"dummy_\w+\s*=", "dummy data in production code"),
-            (r"placeholder\s*=", "placeholder in production code"),
-            (r"sample_data\s*=", "sample data in production code"),
-        ],
-        "file_types": [".py"],
-        "exclude_files": ["test_", "_test.py", "tests/", "conftest.py"],
-    },
-    "NO_BACKWARD_COMPAT": {
-        "patterns": [
-            (r"legacy_\w+", "legacy code - delete or modernize"),
-            (r"_deprecated", "deprecated code - delete completely"),
-            (r"backward_compat", "backward compatibility code - delete old code"),
-            (r"backwards_compat", "backward compatibility code - delete old code"),
-            (r"#\s*removed", "removed marker - delete the code"),
-            (r"#\s*old version", "old version marker - delete"),
-        ],
-        "file_types": [".py"],
-        "exclude_files": ["migrations/", "alembic/"],
-    },
-
-    # === KOTLIN RULES ===
-    # Rule: NO_COMPAT_PATCHES - 不允许兼容性或补丁性方案
-    "NO_COMPAT_PATCHES": {
-        "patterns": [
-            (r"//\s*TODO.*compat", "compatibility TODO - implement properly, no compat patches"),
-            (r"//\s*HACK", "HACK comment - implement properly, no patches"),
-            (r"//\s*FIXME.*workaround", "workaround FIXME - implement the real fix"),
-            (r"//\s*temp(orary)?\s*(fix|patch|workaround|hack)", "temporary fix - implement the real solution"),
-            (r"@Suppress\s*\(\s*\"DEPRECATION\"\s*\)", "@Suppress(DEPRECATION) - migrate to the new API"),
-            (r"@Deprecated", "@Deprecated code in production - delete and use replacement"),
-            (r"backward[sS]?[cC]ompat", "backward compatibility code - delete old code"),
-            (r"legacy[A-Z]\w+", "legacy-prefixed identifier - delete or modernize"),
-        ],
-        "file_types": [".kt"],
-        "exclude_files": ["test/", "Test.kt", "androidTest/"],
-    },
-
-    # Rule: NO_OVERENGINEERING - 不允许过度设计，保持最短路径实现
-    "NO_OVERENGINEERING": {
-        "patterns": [
-            (r"interface\s+\w+Strategy", "Strategy interface - use direct implementation unless multiple strategies exist now"),
-            (r"abstract\s+class\s+\w+Factory", "abstract Factory - use direct constructor unless multiple factories exist now"),
-            (r"object\s+\w+Registry\s*\{", "Registry pattern - use direct references unless dynamic registration is needed now"),
-            (r"class\s+\w+Builder\s*[({]", "Builder pattern - use constructor with defaults unless 5+ optional params exist now"),
-            (r"//\s*TODO.*future", "future TODO - do not design for hypothetical requirements"),
-            (r"//\s*TODO.*later", "deferred TODO - implement now or delete"),
-            (r"//\s*TODO.*eventually", "deferred TODO - implement now or delete"),
-            (r"(?<![A-Za-z])FeatureFlag(?!s?Dto)(?![A-Za-z])", "FeatureFlag in production - remove flag and use the active code path"),
-        ],
-        "file_types": [".kt"],
-        "exclude_files": ["test/", "Test.kt"],
-    },
-
-    # Rule: NO_UNSOLICITED_FALLBACKS - 不允许自行给出需求以外的兜底和降级方案
-    "NO_UNSOLICITED_FALLBACKS": {
-        "patterns": [
-            (r"catch\s*\(\s*_\s*:\s*Exception\s*\)\s*\{?\s*\}", "empty catch block - handle error explicitly or remove try/catch"),
-            (r'catch\s*\(\s*_\s*:\s*\w*[eE]xception\s*\)\s*\{\s*\}', "empty catch block - handle error explicitly or remove try/catch"),
-            (r"\.getOrDefault\s*\(", "getOrDefault - fail explicitly, do not silently substitute"),
-            (r"\.getOrElse\s*\{[^}]*emptyList\s*\(\s*\)", "getOrElse{emptyList()} - propagate the error, do not hide failures"),
-            (r"\.getOrElse\s*\{[^}]*emptyMap\s*\(\s*\)", "getOrElse{emptyMap()} - propagate the error, do not hide failures"),
-            (r"\.getOrElse\s*\{[^}]*null\s*\}", "getOrElse{null} - propagate the error, do not hide failures"),
-            (r'\.getOrElse\s*\{[^}]*""[^}]*\}', "getOrElse{\"\"} - propagate the error, do not hide failures"),
-            (r'runCatching\s*\{', "runCatching - use try/catch with explicit error handling, do not silently absorb"),
-            (r"//\s*[Ff]allback", "fallback comment - fail explicitly, do not degrade"),
-            (r"//\s*[Gg]raceful", "graceful degradation comment - fail explicitly, do not degrade"),
-            (r"//\s*[Bb]est.?effort", "best-effort comment - this is production, not best-effort"),
-            (r'message\s*=\s*".*[Mm]ock\s*data', "mock data in error message - use accurate error messages"),
-            (r"//\s*[Ii]n production", "\"in production\" comment - this IS production, implement it"),
-            (r"//\s*[Ff]or now", "\"for now\" comment - implement the real solution"),
-            (r"//\s*[Pp]laceholder", "placeholder comment - implement the real logic"),
-        ],
-        "file_types": [".kt"],
-        "exclude_files": ["test/", "Test.kt"],
-    },
-
-    # Rule: NO_BROKEN_CHAIN - 全链路逻辑必须正确（检测断链信号）
-    "NO_BROKEN_CHAIN": {
-        "patterns": [
-            (r"TODO\s*\(\s*\)", "empty TODO() call - will crash at runtime, implement the logic"),
-            (r"throw\s+NotImplementedError", "NotImplementedError - implement the logic before committing"),
-            (r"throw\s+UnsupportedOperationException\s*\(\s*\)", "UnsupportedOperationException - implement the logic"),
-            (r"return\s+null\s*//", "return null with comment - suspicious incomplete implementation"),
-            (r"suspend fun \w+\([^)]*\)\s*\{\s*\}", "empty suspend function body - implement the logic"),
-            (r"fun \w+\([^)]*\)\s*\{\s*\}", "empty function body - implement the logic"),
-            (r"override fun \w+\([^)]*\)\s*\{\s*\}", "empty override body - implement the logic"),
-        ],
-        "file_types": [".kt"],
-        "exclude_files": ["test/", "Test.kt"],
-    },
-
-    # Regression rules from ~/.claude/skills/bug-regression-catalog/catalog.yaml
-    # are merged in below (see _load_catalog_rules at the bottom of this file).
-    # Do NOT add inline regression rules here — every regression rule must
-    # live in the catalog so it has a paired chaos runner and observability
-    # signal. The catalog is the single source of truth.
-
-    # Rule: Kotlin hardcoded values (extend existing Python rule to Kotlin)
-    "KT_NO_HARDCODED": {
-        "patterns": [
-            (r'private\s+const\s+val\s+\w*(API_KEY|SECRET|TOKEN|PASSWORD)\w*\s*=\s*"[^"]{8,}"', "hardcoded secret in const - move to Environment config"),
-            (r'private\s+const\s+val\s+\w*ENDPOINT\w*\s*=\s*"https?://', "hardcoded URL in const - move to Environment/ApiConfig"),
-            (r'"https?://\d+\.\d+\.\d+\.\d+', "hardcoded IP in URL - use Environment config"),
-            (r'const\s+val\s+IS_DEBUG\w*\s*=\s*true', "debug flag in production - remove or use build config"),
-        ],
-        "file_types": [".kt"],
-        "exclude_files": ["test/", "Test.kt", "Environment.kt", "ApiConfig.kt"],
-    },
-
-    # === RULE 1: NO ENV FILES — env must be pre-loaded by systemd/shell, never from .env ===
-    "NO_ENV_FILES": {
-        "patterns": [
-            (r"\bload_dotenv\s*\(", "load_dotenv() - env must be pre-loaded by systemd/shell, not loaded from a .env file"),
-            (r"\bfrom\s+dotenv\s+import\b", "dotenv import - env must be pre-loaded by systemd/shell, not from a .env file"),
-            (r"^\s*import\s+dotenv\b", "import dotenv - env must be pre-loaded by systemd/shell, not from a .env file"),
-            (r"source\s+\S*\.env\b", "source .env - env must be pre-loaded by systemd/shell, not sourced from a file"),
-        ],
-        "file_types": [".py", ".sh", ".bash"],
-        "exclude_files": ["test_", "_test.py", "tests/", "test/"],
-    },
-
-    # === RULE 13: NO RAW SCHEMA DDL IN APP — schema goes through Alembic in klik-infra ===
-    "NO_SCHEMA_DDL_IN_APP": {
-        "patterns": [
-            (r"(?i)\bCREATE\s+TABLE\b", "raw CREATE TABLE in app code - DB schema changes go through Alembic in klik-infra (direct port 5432), not app code"),
-            (r"(?i)\bALTER\s+TABLE\b", "raw ALTER TABLE in app code - DB schema changes go through Alembic in klik-infra (direct port 5432), not app code"),
-            (r"(?i)\bDROP\s+TABLE\b", "raw DROP TABLE in app code - DB schema changes go through Alembic in klik-infra, not app code"),
-        ],
-        "file_types": [".py"],
-        "exclude_files": ["alembic/", "migrations/", "migrations-archive/", "klik-infra", "init/", "test_", "_test.py", "tests/", "conftest.py"],
-    },
-}
+# Rules + excludes are DATA, loaded per-project from rules/<project>.yaml at import
+# (see _load_project_rules). The engine itself ships ZERO project knowledge.
+GLOBAL_EXCLUDES: list[str] = []
+RULES: dict = {}
 
 
 def get_files_to_check(staged: bool, specific_files: list[str]) -> list[str]:
@@ -376,25 +160,18 @@ def check_file(filepath: str) -> list[Violation]:
         if not should_check_file(filepath, config):
             continue
 
+        # Rules that intentionally match COMMENT lines (HACK/TODO/fallback markers)
+        # set check_comments: true in their data file; all others skip comment lines.
+        check_comments = config.get("check_comments", False)
         for pattern, message in config["patterns"]:
             regex = re.compile(pattern)
             for line_num, line in enumerate(lines, 1):
                 if regex.search(line):
                     stripped = line.strip()
 
-                    # For rules that specifically CHECK comments, don't skip
-                    comment_check_categories = {
-                        "NO_BACKWARD_COMPAT",
-                        "NO_COMPAT_PATCHES",
-                        "NO_OVERENGINEERING",
-                        "NO_UNSOLICITED_FALLBACKS",
-                        "NO_BROKEN_CHAIN",
-                    }
-
-                    # Skip pure comment lines for non-comment-checking rules
-                    if category not in comment_check_categories:
-                        if is_comment_line(line, file_ext):
-                            continue
+                    # Skip pure comment lines unless the rule opts into them.
+                    if not check_comments and is_comment_line(line, file_ext):
+                        continue
 
                     violations.append(
                         Violation(
@@ -546,6 +323,41 @@ def main() -> int:
 _CATALOG_LOAD_ERROR: "str | None" = None
 
 
+def _load_project_rules() -> None:
+    """Load `rules/<project>.yaml` for each `--project` into RULES + GLOBAL_EXCLUDES.
+
+    The engine ships ZERO project knowledge — a project's rules (patterns,
+    file_types, exclude_files, check_comments) and its global excludes are pure
+    data here. Rule files live in `rules/` next to this script's parent. No
+    `--project` = no project rules load (only catalog regression lints apply)."""
+    projects = _project_filter()
+    if not projects:
+        return
+    rules_dir = Path(__file__).resolve().parent.parent / "rules"
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        sys.stderr.write("production-rules-checker: PyYAML required to load project rules\n")
+        return
+    for proj in sorted(projects):
+        rf = rules_dir / f"{proj}.yaml"
+        if not rf.exists():
+            continue
+        data = yaml.safe_load(rf.read_text()) or {}
+        for exc in data.get("global_excludes") or []:
+            if exc not in GLOBAL_EXCLUDES:
+                GLOBAL_EXCLUDES.append(exc)
+        for name, cfg in (data.get("rules") or {}).items():
+            block = RULES.setdefault(name, {
+                "patterns": [],
+                "file_types": list(cfg.get("file_types") or []),
+                "exclude_files": list(cfg.get("exclude_files") or []),
+                "check_comments": bool(cfg.get("check_comments", False)),
+            })
+            for pat in cfg.get("patterns") or []:
+                block["patterns"].append((pat["pattern"], pat["message"]))
+
+
 def _load_catalog_rules() -> None:
     """Merge regression rules from the unified bug catalog.
 
@@ -585,7 +397,8 @@ def _load_catalog_rules() -> None:
         block["globs"] = sorted(set(block.get("globs", []) + globs))
 
 
-# Apply catalog rules at import time so every CLI invocation picks them up.
+# At import: load this run's per-project rules (data), then merge catalog lints.
+_load_project_rules()
 _load_catalog_rules()
 
 

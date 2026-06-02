@@ -1,0 +1,284 @@
+# Klik production rules — DATA consumed by the generic engine.
+# The engine (scripts/validate_production_rules.py) ships ZERO project knowledge;
+# everything Klik-specific lives here. Another project adds rules/<project>.yaml
+# and runs the same engine with --project <name>.
+global_excludes:
+- validate_production_rules.py
+- CLAUDE.md
+- full_rules.md
+rules:
+  ERROR_CODE_COMPLIANCE:
+    file_types:
+    - .py
+    exclude_files:
+    - test_
+    - _test.py
+    - tests/
+    - conftest.py
+    - validate_production_rules.py
+    patterns:
+    - pattern: raise\s+HTTPException\s*\(\s*status_code\s*=\s*\d+\s*,\s*detail\s*=\s*["\']
+      message: 'HTTPException with plain string detail — wrap in error object: JSONResponse(content={"error":{"error_code":"Xxxxx","error_message":"...","user_tip":"...","stack_trace":""}})'
+    - pattern: '"error_code"\s*:\s*"(?![ABC]\d{4})'
+      message: error_code does not match <Source><CC><SS> 5-char format (e.g. A0101) — register in docs/error-codes.md first
+    - pattern: '"error"\s*:\s*"[a-z_]{3,}(?:_error|_failed|_invalid)"'
+      message: ad-hoc error string — use registered 5-char error_code in KLIK wire format instead
+  STACK_TRACE_DISCIPLINE:
+    file_types:
+    - .py
+    exclude_files:
+    - test_
+    - _test.py
+    - tests/
+    - conftest.py
+    patterns:
+    - pattern: '"stack_trace"\s*:\s*traceback'
+      message: stack_trace filled outside B02xx — only B02xx (internal/panic) may populate stack_trace; set "" for all other codes
+    - pattern: '"stack_trace"\s*:\s*format_exc'
+      message: stack_trace filled outside B02xx — only B02xx (internal/panic) may populate stack_trace; set "" for all other codes
+  KT_ERROR_CODE_COMPLIANCE:
+    file_types:
+    - .kt
+    exclude_files:
+    - test/
+    - Test.kt
+    - androidTest/
+    patterns:
+    - pattern: '"error_code"\s*:\s*"(?![ABC]\d{4})'
+      message: error_code does not match <Source><CC><SS> 5-char format — register in docs/error-codes.md first
+  NO_FALLBACKS:
+    file_types:
+    - .py
+    patterns:
+    - pattern: os\.getenv\s*\(\s*["\'][^"\']+["\']\s*,
+      message: os.getenv with default value - use os.environ[] to fail explicitly
+    - pattern: os\.environ\.get\s*\(\s*["\'][^"\']+["\']\s*,
+      message: os.environ.get with default value - use os.environ[] to fail explicitly
+    - pattern: except\s*:\s*\n\s*pass
+      message: silent exception swallowing - handle or re-raise
+    - pattern: _fallback\s*=
+      message: fallback variable - fail explicitly instead
+    - pattern: _default\s*=
+      message: default variable - fail explicitly instead
+    - pattern: _graceful
+      message: graceful degradation - fail explicitly instead
+  NO_HARDCODED_PATHS:
+    file_types:
+    - .py
+    - .sh
+    - .bash
+    - .yaml
+    - .yml
+    patterns:
+    - pattern: '["\'']/root/'
+      message: hardcoded /root path - use env vars or config
+    - pattern: '["\'']/home/\w+'
+      message: hardcoded /home path - use env vars or config
+    - pattern: '["\'']localhost["\'']'
+      message: hardcoded localhost - use config
+    - pattern: (?<!_LOOPBACK_HOST = )["\']127\.0\.0\.1["\'](?!.*# noqa)
+      message: hardcoded 127.0.0.1 - use config
+  NO_MOCK_DATA:
+    file_types:
+    - .py
+    exclude_files:
+    - test_
+    - _test.py
+    - tests/
+    - conftest.py
+    patterns:
+    - pattern: mock_data\s*=
+      message: mock data in production code
+    - pattern: fake_\w+\s*=
+      message: fake data in production code
+    - pattern: dummy_\w+\s*=
+      message: dummy data in production code
+    - pattern: placeholder\s*=
+      message: placeholder in production code
+    - pattern: sample_data\s*=
+      message: sample data in production code
+  NO_BACKWARD_COMPAT:
+    file_types:
+    - .py
+    exclude_files:
+    - migrations/
+    - alembic/
+    check_comments: true
+    patterns:
+    - pattern: legacy_\w+
+      message: legacy code - delete or modernize
+    - pattern: _deprecated
+      message: deprecated code - delete completely
+    - pattern: backward_compat
+      message: backward compatibility code - delete old code
+    - pattern: backwards_compat
+      message: backward compatibility code - delete old code
+    - pattern: '#\s*removed'
+      message: removed marker - delete the code
+    - pattern: '#\s*old version'
+      message: old version marker - delete
+  NO_COMPAT_PATCHES:
+    file_types:
+    - .kt
+    exclude_files:
+    - test/
+    - Test.kt
+    - androidTest/
+    check_comments: true
+    patterns:
+    - pattern: //\s*TODO.*compat
+      message: compatibility TODO - implement properly, no compat patches
+    - pattern: //\s*HACK
+      message: HACK comment - implement properly, no patches
+    - pattern: //\s*FIXME.*workaround
+      message: workaround FIXME - implement the real fix
+    - pattern: //\s*temp(orary)?\s*(fix|patch|workaround|hack)
+      message: temporary fix - implement the real solution
+    - pattern: '@Suppress\s*\(\s*\"DEPRECATION\"\s*\)'
+      message: '@Suppress(DEPRECATION) - migrate to the new API'
+    - pattern: '@Deprecated'
+      message: '@Deprecated code in production - delete and use replacement'
+    - pattern: backward[sS]?[cC]ompat
+      message: backward compatibility code - delete old code
+    - pattern: legacy[A-Z]\w+
+      message: legacy-prefixed identifier - delete or modernize
+  NO_OVERENGINEERING:
+    file_types:
+    - .kt
+    exclude_files:
+    - test/
+    - Test.kt
+    check_comments: true
+    patterns:
+    - pattern: interface\s+\w+Strategy
+      message: Strategy interface - use direct implementation unless multiple strategies exist now
+    - pattern: abstract\s+class\s+\w+Factory
+      message: abstract Factory - use direct constructor unless multiple factories exist now
+    - pattern: object\s+\w+Registry\s*\{
+      message: Registry pattern - use direct references unless dynamic registration is needed now
+    - pattern: class\s+\w+Builder\s*[({]
+      message: Builder pattern - use constructor with defaults unless 5+ optional params exist now
+    - pattern: //\s*TODO.*future
+      message: future TODO - do not design for hypothetical requirements
+    - pattern: //\s*TODO.*later
+      message: deferred TODO - implement now or delete
+    - pattern: //\s*TODO.*eventually
+      message: deferred TODO - implement now or delete
+    - pattern: (?<![A-Za-z])FeatureFlag(?!s?Dto)(?![A-Za-z])
+      message: FeatureFlag in production - remove flag and use the active code path
+  NO_UNSOLICITED_FALLBACKS:
+    file_types:
+    - .kt
+    exclude_files:
+    - test/
+    - Test.kt
+    check_comments: true
+    patterns:
+    - pattern: catch\s*\(\s*_\s*:\s*Exception\s*\)\s*\{?\s*\}
+      message: empty catch block - handle error explicitly or remove try/catch
+    - pattern: catch\s*\(\s*_\s*:\s*\w*[eE]xception\s*\)\s*\{\s*\}
+      message: empty catch block - handle error explicitly or remove try/catch
+    - pattern: \.getOrDefault\s*\(
+      message: getOrDefault - fail explicitly, do not silently substitute
+    - pattern: \.getOrElse\s*\{[^}]*emptyList\s*\(\s*\)
+      message: getOrElse{emptyList()} - propagate the error, do not hide failures
+    - pattern: \.getOrElse\s*\{[^}]*emptyMap\s*\(\s*\)
+      message: getOrElse{emptyMap()} - propagate the error, do not hide failures
+    - pattern: \.getOrElse\s*\{[^}]*null\s*\}
+      message: getOrElse{null} - propagate the error, do not hide failures
+    - pattern: \.getOrElse\s*\{[^}]*""[^}]*\}
+      message: getOrElse{""} - propagate the error, do not hide failures
+    - pattern: runCatching\s*\{
+      message: runCatching - use try/catch with explicit error handling, do not silently absorb
+    - pattern: //\s*[Ff]allback
+      message: fallback comment - fail explicitly, do not degrade
+    - pattern: //\s*[Gg]raceful
+      message: graceful degradation comment - fail explicitly, do not degrade
+    - pattern: //\s*[Bb]est.?effort
+      message: best-effort comment - this is production, not best-effort
+    - pattern: message\s*=\s*".*[Mm]ock\s*data
+      message: mock data in error message - use accurate error messages
+    - pattern: //\s*[Ii]n production
+      message: '"in production" comment - this IS production, implement it'
+    - pattern: //\s*[Ff]or now
+      message: '"for now" comment - implement the real solution'
+    - pattern: //\s*[Pp]laceholder
+      message: placeholder comment - implement the real logic
+  NO_BROKEN_CHAIN:
+    file_types:
+    - .kt
+    exclude_files:
+    - test/
+    - Test.kt
+    check_comments: true
+    patterns:
+    - pattern: TODO\s*\(\s*\)
+      message: empty TODO() call - will crash at runtime, implement the logic
+    - pattern: throw\s+NotImplementedError
+      message: NotImplementedError - implement the logic before committing
+    - pattern: throw\s+UnsupportedOperationException\s*\(\s*\)
+      message: UnsupportedOperationException - implement the logic
+    - pattern: return\s+null\s*//
+      message: return null with comment - suspicious incomplete implementation
+    - pattern: suspend fun \w+\([^)]*\)\s*\{\s*\}
+      message: empty suspend function body - implement the logic
+    - pattern: fun \w+\([^)]*\)\s*\{\s*\}
+      message: empty function body - implement the logic
+    - pattern: override fun \w+\([^)]*\)\s*\{\s*\}
+      message: empty override body - implement the logic
+  KT_NO_HARDCODED:
+    file_types:
+    - .kt
+    exclude_files:
+    - test/
+    - Test.kt
+    - Environment.kt
+    - ApiConfig.kt
+    patterns:
+    - pattern: private\s+const\s+val\s+\w*(API_KEY|SECRET|TOKEN|PASSWORD)\w*\s*=\s*"[^"]{8,}"
+      message: hardcoded secret in const - move to Environment config
+    - pattern: private\s+const\s+val\s+\w*ENDPOINT\w*\s*=\s*"https?://
+      message: hardcoded URL in const - move to Environment/ApiConfig
+    - pattern: '"https?://\d+\.\d+\.\d+\.\d+'
+      message: hardcoded IP in URL - use Environment config
+    - pattern: const\s+val\s+IS_DEBUG\w*\s*=\s*true
+      message: debug flag in production - remove or use build config
+  NO_ENV_FILES:
+    file_types:
+    - .py
+    - .sh
+    - .bash
+    exclude_files:
+    - test_
+    - _test.py
+    - tests/
+    - test/
+    patterns:
+    - pattern: \bload_dotenv\s*\(
+      message: load_dotenv() - env must be pre-loaded by systemd/shell, not loaded from a .env file
+    - pattern: \bfrom\s+dotenv\s+import\b
+      message: dotenv import - env must be pre-loaded by systemd/shell, not from a .env file
+    - pattern: ^\s*import\s+dotenv\b
+      message: import dotenv - env must be pre-loaded by systemd/shell, not from a .env file
+    - pattern: source\s+\S*\.env\b
+      message: source .env - env must be pre-loaded by systemd/shell, not sourced from a file
+  NO_SCHEMA_DDL_IN_APP:
+    file_types:
+    - .py
+    exclude_files:
+    - alembic/
+    - migrations/
+    - migrations-archive/
+    - klik-infra
+    - init/
+    - test_
+    - _test.py
+    - tests/
+    - conftest.py
+    patterns:
+    - pattern: (?i)\bCREATE\s+TABLE\b
+      message: raw CREATE TABLE in app code - DB schema changes go through Alembic in klik-infra (direct port 5432), not app code
+    - pattern: (?i)\bALTER\s+TABLE\b
+      message: raw ALTER TABLE in app code - DB schema changes go through Alembic in klik-infra (direct port 5432), not app code
+    - pattern: (?i)\bDROP\s+TABLE\b
+      message: raw DROP TABLE in app code - DB schema changes go through Alembic in klik-infra, not app code

@@ -1,26 +1,42 @@
-# production-rules-checker — the KLIK instance
+# production-rules-checker — generic engine + per-project rule data
 
-This is **Klik's** instance of a per-project production-rules gate, kept here as the
-reference implementation. **It is not a global component** — don't read it as "this whole
-repo is Klik tooling." The global, reusable system lives in
-[`../no-new-bugs`](../no-new-bugs) and [`../bug-regression-catalog`](../bug-regression-catalog).
+A **project-agnostic** production-rules gate. The engine ships **zero** project
+knowledge; every rule is data, loaded per `--project`. Klik is just the first
+project with a rules file here.
 
-## What's global vs Klik-specific here
+## Layout
 
-| | |
-|---|---|
-| **Global / reusable** | The validator **engine** (`scripts/validate_production_rules.py`) and its `--project <name>` filter over the shared `../bug-regression-catalog`. The catalog, the loader, and the project isolation are project-agnostic. |
-| **Klik-specific** | `references/full_rules.md` and the built-in `RULES` (KLIK 5-char error codes + wire format, `KK_common/logger`, klik-infra/Alembic on port 5432, the three KLIK Feishu specs). These are *rule text for one project*, not the framework. |
+| Path | What | Project-specific? |
+|---|---|---|
+| `scripts/validate_production_rules.py` | The **engine** — pure mechanism: file selection, glob/exclude matching, line scanning, the catalog `--project` filter, fail-loud on a malformed catalog. Contains no rule text and no project name. | **No — global.** |
+| `rules/klik.yaml` | **Klik's** rules as data: patterns, `file_types`, `exclude_files`, `check_comments`, and `global_excludes`. | Yes (Klik). |
+| `references/full_rules.md` | Klik's human-readable rules narrative + sources of truth. | Yes (Klik). |
 
-## How another project gets its own gate
+The engine also merges regression lints from the shared
+[`../bug-regression-catalog`](../bug-regression-catalog), filtered by the same `--project`.
 
-Same engine, shared catalog, your own rules:
+## Run it
 
 ```bash
-# Owl's gate, say — only Owl's catalog lints load; Klik/EVE never bleed in:
-validate_production_rules.py --project owl <files...>
+# Klik gate — loads rules/klik.yaml + klik catalog lints only:
+validate_production_rules.py --project klik <files...>
 ```
 
-Then supply your project's own rules reference (the analogue of `full_rules.md`). The
-catalog `--project` mechanism guarantees one project's lint can never fire on another's
-file. Only the rule text is ever per-project.
+## Add your own project (no engine change)
+
+1. Drop a `rules/<project>.yaml` next to `rules/klik.yaml`:
+   ```yaml
+   global_excludes: [ ... ]      # files to never scan (your docs/fixtures)
+   rules:
+     YOUR_RULE_NAME:
+       file_types: [".py"]
+       exclude_files: ["tests/"]
+       check_comments: false      # true only if the rule should match comment lines
+       patterns:
+         - { pattern: 'your-regex', message: 'why it's a violation' }
+   ```
+2. Run `validate_production_rules.py --project <project> <files...>`.
+
+That's it — the engine loads your rules + your catalog lints, and the `--project`
+filter guarantees another project's rule can never fire on your file. Only the rule
+**data** is ever per-project; the engine is shared by everyone.

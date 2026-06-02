@@ -20,7 +20,7 @@ because it's the most-worked project so far — that's incident history, not sco
 
 | Dir | What |
 |---|---|
-| [`production-rules-checker/`](production-rules-checker/) | **Klik's** instance of a per-project gate, kept as the reference implementation. The *reusable* part is the validator **engine** + the catalog `--project` filter; the *Klik-specific* part is its rule text. Owl/EVE/any project stand up their own gate the same way — see that dir's README. |
+| [`production-rules-checker/`](production-rules-checker/) | A project-agnostic gate: the validator **engine ships zero project knowledge** — every rule is data. Klik's rules live in `production-rules-checker/rules/klik.yaml`; any project adds `rules/<project>.yaml` and runs `--project <name>`. See that dir's README. |
 
 ## How ANY agent/project adopts this
 
