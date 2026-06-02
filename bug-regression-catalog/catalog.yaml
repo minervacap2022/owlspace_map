@@ -316,8 +316,10 @@ bugs:
       provider failover / dropped connection).
     lint:
       - rule: SINK_MUST_FINALIZE_ON_TERMINAL_EVENTS
-        pattern: "case 'text_complete':[\\s\\S]{0,4000}default:"
-        message: "StoatChannelSink switch must handle 'error' AND 'session_complete' between text_complete and default — they are the only finalize hooks when a turn ends without text_complete. Removing them silently re-truncates interrupted replies."
+        presence: required
+        path: packages/owl-agent-server/src/stoat/channel-sink.ts
+        pattern: 'finalizeInterrupted\('
+        message: "StoatChannelSink must call finalizeInterrupted() on terminal/default paths so a turn that ends without a clean text_complete is still finalized (not silently re-truncated). Presence = healthy."
         file_types: [".ts"]
         exclude_files: ["__tests__/", ".test.ts"]
         # NOTE: inverted-intent lint — this pattern MATCHING is the healthy state.
@@ -381,6 +383,8 @@ bugs:
       idea it's in a channel with named peers it could @mention.
     lint:
       - rule: SYSTEM_PROMPT_MUST_EMIT_CHANNEL_BLOCK
+        presence: required
+        path: packages/owl-agent/src/prompts/system-prompt.ts
         pattern: "input.channel"
         message: "buildSystemPrompt must accept and emit a <channel> roster block so channel-bound owlbots know they're in a shared space and can @mention peers. Removing it regresses bots back to 'I'm isolated'. Inverted-intent: this match is the healthy state."
         file_types: [".ts"]
@@ -597,6 +601,8 @@ bugs:
       only knew their own bots, not org-visible bots from other owners.
     lint:
       - rule: CHANNEL_BOTS_MUST_EXPOSE_ORG_ROSTER
+        presence: required
+        path: src/routes/me.ts
         pattern: "org_roster"
         message: "The channel-bots endpoints must return org_roster so clients resolve cross-owner owlbot names + build complete peer rosters. Inverted-intent: this match is the healthy state."
         file_types: [".ts"]
@@ -1099,7 +1105,10 @@ bugs:
     lint:
       # The OLD scan-first reconnect logged this exact string. Its reappearance means
       # someone re-gated auto-reconnect on a scan — the regression is back.
+      rule: NO_SCAN_GATED_AUTO_RECONNECT
+      presence: forbidden
       pattern: 'auto-reconnect scanning for'
+      message: "The old scan-gated auto-reconnect logged this exact string; its reappearance in KlikDeviceStateRepository means reconnect was re-gated on a BLE scan — the SAVE-mode regression is back. A MATCH here IS the bug."
       globs:
         - "**/data/klik/KlikDeviceStateRepository.kt"
     chaos:
@@ -1455,13 +1464,17 @@ bugs:
       so owlbots could never use reach to message peers regardless of their policy.
     lint:
       - rule: DEFAULT_TOOL_FACTORY_MUST_APPEND_ALWAYS_ON_TOOLS
+        presence: required
+        path: packages/owl-agent-server/src/runtime/runtime.ts
         pattern: 'ALWAYS_ON_TOOLS\.filter\(.*have\.has'
         message: "defaultToolFactory must dedupe-append ALWAYS_ON_TOOLS after building the base set. Without this step, reach (and future always-on tools) are silently absent from every owlbot. Inverted-intent: this pattern MATCHING is the healthy state."
         file_types: [".ts"]
         exclude_files: ["__tests__/", ".test.ts"]
       - rule: DEFAULT_TOOL_FACTORY_MUST_HANDLE_NONE_EXPLICITLY
-        pattern: "if \\(policy === ['\"]none['\"]\\) base = \\[\\]"
-        message: "defaultToolFactory must have an explicit none→[] branch before the else (codingTools) fallthrough. Without it, tools:'none' owlbots silently receive the full coding set. Inverted-intent: this match is the healthy state."
+        presence: required
+        path: packages/owl-agent-server/src/runtime/__tests__/reach-always-on.test.ts
+        pattern: 'mk\("none"\)'
+        message: "The tools:'none' case must stay covered: reach-always-on.test.ts must exercise defaultToolFactory(ctx, mk(\"none\")). The explicit none→[] source branch was refactored; this test is now the guard. Presence = healthy."
         file_types: [".ts"]
         exclude_files: ["__tests__/", ".test.ts"]
     chaos:
@@ -1545,6 +1558,8 @@ bugs:
       gitignored, NOT deleted.
     lint:
       - rule: SESSIONS_WORKING_DIR_MUST_BE_GITIGNORED
+        presence: required
+        path: .gitignore
         pattern: 'KK_frontendmobile/sessions/'
         message: ".gitignore must keep the `KK_frontendmobile/sessions/` entry — it's the 26GB live recording working dir written by streaming_api. Without it one `git add -A`/`.` stages multi-GB of user audio. Inverted-intent: this match IS the healthy state. Never delete the data, only keep it ignored."
         file_types: [".gitignore"]
@@ -1577,6 +1592,8 @@ bugs:
       channels already use); drop the admin-only gate on create; accept any VIEWABLE
       owlbot (own OR org-visible), not just the caller's own.
     lint:
+      rule: CHANNELS_USE_SERVER_OWNER_TOKEN
+      presence: required
       pattern: 'serverOwnerToken'
       path: owl-backend/src/routes/channels.ts
       description: The user-facing channel routes must create/invite via serverOwnerToken (owner delegation), NOT the caller's Stoat token — only the Stoat server owner holds ManageChannel/ManageServer. Match count must be >= 1.
@@ -1606,6 +1623,8 @@ bugs:
       gated — Starter users skip it; that is NOT a bug.)
     lint:
       - rule: BACKUP_HAS_SERVER_FS_FALLBACK
+        presence: required
+        path: KK_cloudstorage/backup_api.py
         pattern: 'get_dropbox_free_bytes|save_to_server'
         message: "backup_api.backup_upload must pre-check Dropbox free space and fall back to save_to_server() (cloud-server FS) when Dropbox is full, else a full 2GB Dropbox silently drops backups and dropbox_url stays null. Inverted-intent: this match IS the healthy state."
         file_types: [".py"]
@@ -1644,6 +1663,8 @@ bugs:
       regenerate the lock, so a fresh `uv sync` reproduces +cpu instead of pulling CUDA.
     lint:
       - rule: TORCH_PINNED_TO_CPU_INDEX
+        presence: required
+        path: pyproject.toml
         pattern: 'index = "pytorch-cpu"'
         message: "pyproject.toml must keep torch/torchaudio pinned to the pytorch-cpu index (the deploy host has no GPU). Drop it and `uv sync` resolves the PyPI CUDA build → libtorch_cuda.so missing → torch/speechbrain services crash-loop. Inverted-intent: this match IS the healthy state."
         file_types: [".toml"]
@@ -1677,6 +1698,8 @@ bugs:
       agents+users and returns agent_slug/agent_display_name + user_* per member;
       the panel prefers those. Co-members may see each other's names (no leak).
     lint:
+      rule: CHANNEL_MEMBERS_RESOLVE_DISPLAY_NAMES
+      presence: required
       pattern: 'agent_display_name'
       path: owl-backend/src/routes/channels.ts
       description: GET /v1/channels/:id/members must resolve display names server-side (LEFT JOIN agents/users → agent_slug/agent_display_name/user_*) so the client can render members it doesn't own. Match count must be >= 1.
@@ -1704,6 +1727,8 @@ bugs:
       prune before). Fix: prune in the wilsonxu ssh step (owns the dirs), run
       migrate inline; stop using the VM post-deploy script.
     lint:
+      rule: DEPLOY_PRUNES_RELEASES_AS_SSH_USER
+      presence: required
       pattern: 'Prune old releases AS wilsonxu'
       path: owl-backend/.github/workflows/deploy.yml
       description: deploy.yml must prune releases as the ssh user (wilsonxu, who owns them), not via owlspace — else rm fails and aborts before the restart. Keep prune BEFORE the systemctl restart in the same ssh step. Match count must be >= 1.
@@ -1731,6 +1756,7 @@ bugs:
       NRestarts=80. Fixed in PR #864 by moving both directives to [Unit].
     lint:
       - rule: STARTLIMIT_NOT_IN_SERVICE_SECTION
+        presence: forbidden
         pattern: '\[Service\][^\[]*StartLimit(IntervalSec|Burst)'
         message: "StartLimitIntervalSec/StartLimitBurst inside a unit's [Service] section are silently ignored by systemd ('Unknown key name') — they belong in [Unit], else the crash-loop rate-limit is OFF (klik@.service let the torch loop hit NRestarts=80). A MATCH here IS the bug — move them to [Unit]."
         file_types: [".service"]
@@ -1760,6 +1786,8 @@ bugs:
       sidebar grew a "channel" SidebarMenu type with Rename (RenameDialog) / Delete
       (confirm) on standard channels only.
     lint:
+      rule: CHANNEL_DELETE_ALLOWS_CREATOR_OR_ADMIN
+      presence: required
       pattern: "Only the channel creator or an admin can delete it"
       path: owl-backend/src/routes/channels.ts
       description: DELETE /v1/channels/:id must allow the creator OR an admin (not requireAdmin), and a rename PATCH must exist — both with the creator-or-admin guard + built-in protection. Match count must be >= 1.
@@ -1790,8 +1818,10 @@ bugs:
       edit draft, and the serializer so it round-trips. Local owlbots only — cloud
       owls force "sandbox".
     lint:
+      rule: AGENTS_SERIALIZER_INCLUDES_FIXEDCWD
+      presence: required
       pattern: "fixedCwd"
-      path: owl-agent/packages/owl-agent-server/src/http/routes/agents.ts
+      path: packages/owl-agent-server/src/http/routes/agents.ts
       description: The /api/agents serializer must include fixedCwd, or the Owlbots "fixed" cwd input can't load a saved path. Match count must be >= 1.
     chaos:
       runner: null
@@ -1819,8 +1849,10 @@ bugs:
       (always_on true, "respond to every message, matching DM behavior"). Fix:
       default the picker + owlBackend.channels.addOwlbot to always_on=true.
     lint:
+      rule: ADDOWLBOT_INVITES_ALWAYS_ON
+      presence: required
       pattern: 'addOwlbot.channel.id, backendUuid, true.'
-      path: owl-agent/apps/owlspace/src/renderer/pages/channels/AddOwlbotPicker.tsx
+      path: apps/owlspace/src/renderer/pages/channels/AddOwlbotPicker.tsx
       description: AddOwlbotPicker must invite owlbots with always_on=true so they reply to every message, not only @-mentions. Match count must be >= 1.
     chaos:
       runner: null

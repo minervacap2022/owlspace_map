@@ -19,20 +19,17 @@ from load_catalog import (
     _globs_of, _lint_project, _intent,
 )
 
-# Lying guards that PRE-DATE the routing invariant below: each has a `pattern` but
-# is enforced NOWHERE — either no rule+message (so not a forbidden lint), or a
+# Lying guards that PRE-DATE the routing invariant below: each had a `pattern` but
+# was enforced NOWHERE — either no rule+message (so not a forbidden lint), or a
 # MUST_/HAS_ rule lacking the explicit `presence: required` (so required_guards()
 # won't load it; it never infers, by design). Tracked tech-debt, NOT acceptable
 # long-term. This set may only SHRINK: to fix one, add `presence: required` (and
 # verify the pattern matches its target file so the guard doesn't false-fail) or
 # rule+message, then delete its id here. See BUG-2026-06-03-461e97.
-KNOWN_UNENFORCED = frozenset({
-    "BUG-2026-05-29-B", "BUG-2026-05-29-D", "BUG-2026-05-29-M",
-    "BUG-2026-06-01-E", "BUG-2026-06-02-9c936c", "BUG-2026-06-02-B",
-    "BUG-2026-06-02-C", "BUG-2026-06-02-D", "BUG-2026-06-02-E",
-    "BUG-2026-06-02-F", "BUG-2026-06-02-H", "BUG-2026-06-02-I",
-    "BUG-2026-06-02-J", "BUG-2026-06-02-K", "BUG-2026-06-02-a79689",
-})
+# All 15 original lying guards were FIXED 2026-06-03 (see BUG-2026-06-03-461e97):
+# each now routes to a real enforcement path (forbidden lint or presence:required
+# guard with a verified target). Baseline is now empty; a NEW lying guard fails.
+KNOWN_UNENFORCED = frozenset()
 
 
 class CatalogLoaderInvariants(unittest.TestCase):
