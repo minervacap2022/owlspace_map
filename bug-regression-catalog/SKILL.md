@@ -1,6 +1,6 @@
 ---
 name: bug-regression-catalog
-description: Single source of truth for every production bug we have shipped. The validator (`/production-rules-checker`), the chaos phases of `/full-stack-test` and `/klik-ios-e2e-test`, and the SessionEnd hook all read from this catalog. Adding a bug means appending ONE entry to catalog.yaml; nothing is duplicated across tools. Use when a new bug is found and fixed, or when you need to verify regression coverage.
+description: Single source of truth for every production bug shipped across all projects. The validator (the production-rules gate), the chaos phases of `/full-stack-test` and a client↔backend e2e test, and the SessionEnd hook all read from this catalog. Adding a bug means appending ONE entry to catalog.yaml; nothing is duplicated across tools. Use when a new bug is found and fixed, or when you need to verify regression coverage.
 ---
 
 # Bug Regression Catalog
@@ -16,7 +16,7 @@ One file. Three consumers. Zero duplication.
 │   ├── load_catalog.py                   ← shared loader
 │   ├── emit_lint_rules.py                ← consumed by validate_production_rules.py
 │   ├── run_chaos_phase.sh                ← consumed by /full-stack-test phase_21
-│   │                                       and /klik-ios-e2e-test STEP 12
+│   │                                       and a client↔backend e2e test
 │   └── chaos/<bug-id>.sh                 ← one runner per bug with `chaos.runner` set
 └── SKILL.md                              ← this file
 ```
@@ -27,7 +27,7 @@ One file. Three consumers. Zero duplication.
 |------|-----------------------------|
 | `/production-rules-checker` | `validate_production_rules.py` imports `emit_lint_rules.py` and merges catalog patterns into its `RULES` dict. |
 | `/full-stack-test` | `phase_21_regression_catalog` invokes `scripts/run_chaos_phase.sh`, which iterates catalog entries and runs each `chaos.runner` against the live stack. |
-| `/klik-ios-e2e-test` | `STEP 12` invokes the same `scripts/run_chaos_phase.sh` with `--ios-edge` flag (filters to public-edge-visible bugs). |
+| a client↔backend e2e test | invokes the same `scripts/run_chaos_phase.sh` with an `--edge` filter (public-edge-visible bugs only). |
 | `SessionEnd` hook | When a commit message contains `fix` plus a bug keyword, reminds Claude to append a catalog entry. |
 
 ## Adding a bug
@@ -76,7 +76,7 @@ Don't, unless an alternative observability path (alert, runtime check) has been 
 Because before this skill, the same bug knowledge lived in:
 - Inline regex in `validate_production_rules.py`
 - Phase 6/7 wiring inside `full-stack-test/run_all.sh`
-- Phase 11 assertions in `klik-ios-e2e-test/test_flow.sh`
+- Assertions inside a client↔backend e2e test's flow script
 
 Three places to update for one bug. So nobody updated all three. So regression coverage rotted.
 

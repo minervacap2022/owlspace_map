@@ -24,14 +24,14 @@ do not prevent regressions by adding more reviewers; you shape the change so its
 blast radius is **small, visible, and caught at change-time**.
 
 **This is a GLOBAL protocol — every project, every language, every future change.** The
-principles here are universal; the concrete examples (drawn from one project, Klik) only
-*illustrate* them — substitute your stack's equivalents (`./gradlew` → your build;
-`klik-deploy-parity` → your deploy-parity check; `@Serializable`/Pydantic → your schema type).
-The protocol has two arms: this **discipline** (how you change code) and its **tooling** — the
-*sector map*, a live per-sector view of the seven know-before-you-code dimensions, instantiable
-in any repo (see [`references/sector-map.md`](references/sector-map.md); Klik is instance #1).
-Goal for every future change: ship **bugless** — or, honestly, force any bug to defeat a
-*visible, enforced* signal instead of slipping past an *invisible* one.
+principles are universal and the worked examples below are deliberately **generic** —
+substitute your stack's equivalents (your build tool, your schema type, your deploy-parity
+check, your e2e harness). The protocol has two arms: this **discipline** (how you change
+code) and its **tooling** — the *sector map*, a live per-sector view of the seven
+know-before-you-code dimensions, instantiable in any repo (see
+[`references/sector-map.md`](references/sector-map.md)). Goal for every future change: ship
+**bugless** — or, honestly, force any bug to defeat a *visible, enforced* signal instead of
+slipping past an *invisible* one.
 
 ---
 
@@ -76,15 +76,15 @@ So the rule inverts:
 **One line:** *Couple everything to one canonical, typed, tested definition; duplicate
 nothing; depend on contracts, never on guts.*
 
-Proof from our own bugs:
-- **Under-coupling →** `subscription_api` crash-loop (BUG-2026-05-31-G): launcher didn't
-  source `KK_common/scripts/common.sh`+`setup_paths`, so `${KK_SUBSCRIPTION_PORT}` was
-  unset → `/health` 500 → probe kills it → flap. A missing env it silently depended on.
-- **Duplication-drift →** a leftover `kk-suggest.service` ran the *same*
-  `uvicorn KK_suggest.suggest_api --port 8342` as the new `klik@suggest_api`; the two
-  fought over 8342 AND double-fired rules (a real data bug). Two copies of one fact.
-- **Drift at repo scope →** Klik_one ↔ Klik_newandroid are sibling forks, not mirrors;
-  every invariant must be enforced **twice** or it drifts.
+Proof, in generic shapes you will recognize:
+- **Under-coupling →** a service launcher didn't source its shared env-setup, so a
+  required `${PORT}` it silently depended on was unset → `/health` 500 → the liveness
+  probe kills it → crash-loop. A dependency that lived only in an assumption.
+- **Duplication-drift →** a leftover service unit ran the *same* process on the *same*
+  port as its replacement; the two fought over the port AND double-fired the work. Two
+  copies of one fact.
+- **Drift at repo scope →** two sibling forks of a client (e.g. iOS + Android) are not
+  1:1 mirrors; every shared invariant must be enforced in **both** or it drifts.
 
 ---
 
@@ -97,17 +97,18 @@ State assumptions explicitly ("I'm assuming X, Y, Z — correct me or I proceed"
 filling ambiguous requirements is the most dangerous failure. If multiple interpretations
 exist, surface them. Reframe vague asks into a **measurable** done-criterion ("faster" →
 "LCP < 2.5s on 4G"). For a bug, this is the Iron Law: **no fix without a confirmed root
-cause** — and if each fix reveals a new break, you are at the wrong layer (the 7-bug klik
-chain was the price of skipping this, found one TestFlight build at a time).
+cause** — and if each fix reveals a new break, you are at the wrong layer (a multi-bug
+whack-a-mole chain, discovered one release build at a time, is the price of skipping this).
 
 **Inputs you must know for the partition you are about to touch:**
-- **Schema** — its data shapes + invariants. *Source:* Kotlin `@Serializable` / `data
-  class` DTO; DB via `ssh gcp psql … \dt` + the migration files; API via the OpenAPI /
-  contract doc.
-- **The contract** — read the `interface` / `expect`-`actual` decl and its KDoc; for a
-  service, the route signatures in its `*_api.py` plus the DTOs in `data/network/`.
+- **Schema** — its data shapes + invariants. *Source:* your language's schema type
+  (a `@Serializable`/`data class` DTO, a Pydantic model, a struct + tags); the DB via
+  `psql … \dt` + the migration files; the API via its OpenAPI / contract doc.
+- **The contract** — read the `interface` / declaration and its doc comment; for a
+  service, its route signatures plus the request/response DTOs.
 - **Dependency graph** — who it depends on, and *critically* **who depends on it** = the
-  real blast radius. `git grep`, import graph, `./gradlew :x:dependencies`.
+  real blast radius. `git grep`, the import graph, the build's dependency query
+  (`./gradlew :x:dependencies`, `npm ls`, …).
 - **The OWNER** — derive from git, don't build a system: `git log -- <file>` /
   `git blame -L <lines> <file>`. When you touch someone's code, consult them — the owner
   is the live oracle for the slice of the contract not yet captured by types or tests.
@@ -119,27 +120,30 @@ six dimensions a parser CANNOT see; know these too, or you will confidently brea
 can't see:**
 - **Behavior** — invariants ("always/never" rules), real runtime data + edge cases
   (falsy-zero), concurrency/ordering, failure semantics (what throws vs. is silently
-  swallowed). → the `encodeDefaults` 403; the VAD falsy-zero; the liquid-ancestor SIGSEGV.
+  swallowed). → a serialization-default that silently drops a required field → 403; a
+  falsy-zero treated as "absent" at a boundary; a library-misuse crash (SIGSEGV).
 - **Context** — env/config/secrets the sector resolves and how they differ dev→prod;
   deploy state vs. git; resource ownership (ports/files/singletons); infra/routing config.
-  → `subscription_api` bare-env; server-on-wrong-branch; duplicate `kk-suggest` unit; the
-  nginx avatar-proxy regex.
+  → a bare-env launcher; a server running the wrong branch; a duplicate service unit; an
+  nginx longest-prefix `location` regex preempting the route you expected.
 - **Boundaries** — parallel implementations that must stay in sync (forks, client↔server
   DTOs, iOS↔Android) and external-system contracts + their failure modes (DB, hardware,
-  Brevo). → the two-fork drift; the unpowered mic rail.
+  an email/SMS provider). → the two-fork drift; an unpowered hardware rail returning garbage.
 - **Intent & History** — the *why* / ADR, past bugs here + why prior fixes failed (the
-  catalog, `git log`), non-code constraints (BIPA, COPPA-13, `user_id` isolation, perf
-  SLAs, the production rules), and the spec's "done". → re-introduced fixed bugs; the BIPA fix.
+  catalog, `git log`), non-code constraints (privacy law e.g. BIPA/COPPA-13, per-user
+  data isolation, perf SLAs, the production rules), and the spec's "done". → a re-introduced
+  fixed bug; a compliance fix that must not be undone.
 - **Change-safety** — true blast radius (runtime paths + cross-repo consumers + migrations),
   observability (how you'd KNOW it broke in prod).
 - **Tests & Coverage** — which tests cover this (own + consumers'), coverage % + pass/fail,
   and especially the **uncovered surface** you're about to touch. A parser sees test *files*;
   it does NOT see what they *cover*, whether they *pass*, or the gap. Run the covering tests
   green *before* you touch anything; if the path is uncovered, write the test FIRST. → the
-  missing/lying feedback loop behind the whole recurring-bug class; the ~5%-coverage areas.
+  missing/lying feedback loop behind a whole recurring-bug class; the low-coverage areas.
 
-Structure goes in the sector graph; these six mostly do NOT — anchor them as guards, the
-parity gate, `CONTEXT.md` / ADRs, the catalog, and a coverage/test map, or the agent never sees them.
+Structure goes in the sector graph; these six mostly do NOT — anchor them as guards, a
+deploy-parity gate, `CONTEXT.md` / ADRs, the catalog, and a coverage/test map, or the agent
+never sees them.
 
 ### (2) Feedback-loop-first  → `systematic-debugging`, `test-driven-development`
 **Before changing code, establish a fast pass/fail signal — a failing test, a runnable
@@ -170,47 +174,45 @@ shared one (that is how duplication-drift starts).
 - Prefer the minimum: 200 lines that should be 50 → rewrite. No speculative
   flexibility/config/error-handling for impossible scenarios.
 - **Shrink the blast radius — decompose the God-file.** An oversized unit *is* a bug
-  factory: `MainApp.kt` at 3,785 LOC was touched 61× and bred regressions because every
-  change reached too far. When the partition you must touch is too big to reason about,
-  split it along the contracts (step 1 / Principle 0 part 5) so each future change is
-  scope-locked. Big-and-tangled is itself the defect.
+  factory: a 3,785-LOC god-file touched 61× bred regressions because every change reached
+  too far. When the partition you must touch is too big to reason about, split it along the
+  contracts (step 1 / Principle 0 part 5) so each future change is scope-locked.
+  Big-and-tangled is itself the defect.
 
-### (4) Verify from a CLEAN slate in the REAL target env  → `e2e-test`, `klik-ios-e2e-test`, `full-stack-test`, the ladder below
+### (4) Verify from a CLEAN slate in the REAL target env  → `e2e-test`, `full-stack-test`, the ladder below
 "Works" means reproducible **from a fresh `git clone` + clean build + clean-environment
 run** — *not* from the state you are holding. Local-green is rung 1 of 6; climb the ladder
 (next section). "Proven end-to-end" means **every entry path**, not the happy one — assert
 on observable output (return value, HTTP status, file on disk, rendered result), never on
-"it ran" or a count. For THIS repo the clean run is non-trivial: rung 1's `git worktree`
-command → `./gradlew :samples:composeApp:linkDebugFrameworkIosSimulatorArm64` →
-`xcodebuild` → `simctl install/launch` (see CLAUDE.md Build Commands). Use
-`klik-ios-e2e-test` (iOS↔backend) or `full-stack-test` (3+ services).
+"it ran" or a count. The clean run is often multi-step (worktree → build → install →
+launch) — script it. Use an e2e harness for client↔backend and a full-stack harness for
+3+ services.
 
-### (5) Guard against recurrence  → `/production-rules-checker`, `production-code-audit`, `review`
+### (5) Guard against recurrence  → the production-rules gate, `production-code-audit`, `review`
 A fix is not done when it's green; it's done when it **can't silently come back**, and the
 window matters: a bug caught at change-time costs ~nothing, the same bug caught by a human
-on a TestFlight build days later is the expensive failure mode. Shorten the detection
+on a release build days later is the expensive failure mode. Shorten the detection
 latency to pre-merge.
 - **Turn the prose-landmine into a CHECK.** When a bug class recurs, or a doc says
   "always/never X", add a guard/test that fails loudly. Universal starter:
   `~/.claude/lib/guards/repo-guards.sh` — the **script** (copy into the repo's `scripts/`,
-  add project-specific checks, wire into CI), *not* the `repo-guards` skill. Klik example:
-  `k1-guards.sh` turns "no Material3 in `ui/klikone/`", "`k1Clickable` not raw
-  `.clickable`", and the `encodeDefaults=false` 403 landmine (`age_confirmed_over_13`
-  carries no default) into a blocking grep check.
-- **Catalog the bug** in `~/.claude/skills/bug-regression-catalog/catalog.yaml`: `id` /
-  `user_visible_symptom` / `lint` (regex rule) / `chaos` (runner or `null`) /
+  add project-specific checks, wire into CI), *not* the `repo-guards` skill. Example: a
+  guards script that turns "no legacy UI framework in the new design-system dir", "use the
+  wrapper, not the raw API", and a serialization-default landmine (a required field must
+  carry no default, or it's dropped on the wire → 403) into a blocking grep check.
+- **Catalog the bug** in the shared bug catalog (`bug-regression-catalog/catalog.yaml`):
+  `id` / `user_visible_symptom` / `lint` (regex rule) / `chaos` (runner or `null`) /
   `observable_signal` (the grep/curl that tells you in prod whether the fix holds).
   Removing an entry requires a note on what observability replaced it.
-- **Wire CODEOWNERS + a scheduled run.** Put it at `Klik_one/.github/CODEOWNERS`, e.g.
-  `ui/klikone/  @owner` — note the `liquid/.github` tree is dormant; root `.github` is
-  the live one. Core logic gets unit tests that run on a **schedule**: add
-  `on: schedule: - cron:` to a workflow under `Klik_one/.github/workflows/` (copy the
-  shape of `k1-guards.yml`). **Old tests are the trip-wire** — new changes continuously
-  monitor old behavior, so the day a fresh edit silently breaks settled behavior, CI goes
-  red. A test that doesn't *run* isn't protection. And a feedback loop that isn't
-  committed and wired into CI is **not a feedback loop** — the prevention system itself
-  once fell to this meta-bug (authored, never committed: BUG-2026-05-31-A). This standing,
-  self-running alarm is exactly what makes Principle 0's aggressive coupling safe.
+- **Wire CODEOWNERS + a scheduled run.** Put it at your repo's `.github/CODEOWNERS`, e.g.
+  `src/feature/  @owner`. Core logic gets unit tests that run on a **schedule**: add
+  `on: schedule: - cron:` to a workflow under `.github/workflows/`. **Old tests are the
+  trip-wire** — new changes continuously monitor old behavior, so the day a fresh edit
+  silently breaks settled behavior, CI goes red. A test that doesn't *run* isn't protection.
+  And a feedback loop that isn't committed and wired into CI is **not a feedback loop** —
+  the prevention system itself once fell to this meta-bug (a guard authored but never
+  committed). This standing, self-running alarm is exactly what makes Principle 0's
+  aggressive coupling safe.
 
 *(Reaching for `production-code-audit`: verify every auto-fix — it violates surgical-diff
 by default.)*
@@ -229,19 +231,19 @@ by default.)*
    (hardcoded paths, regional mirrors). CI's whole value is the fresh checkout that exposes
    every implicit local assumption — that is why you watch it go green, not why you skip it.
 3. **PIN + DECLARE THE ENV** — tool versions (`toolchain`/`.tool-versions`/Docker), deps in
-   a **lockfile**, ZERO machine-specific paths/mirrors in the repo (those live in
-   `~/.gradle` etc.). Makes "their env" == "my env". *Catches:* the absolute
-   `org.gradle.java.home` pin, the region mirror ahead of Central.
-4. **TEST THE ACTUAL TARGET ENV** — run against the real deploy target (systemd/prod), not
-   a local proxy. *Catches:* env-divergence (worked on `nohup`, died on systemd).
+   a **lockfile**, ZERO machine-specific paths/mirrors in the repo (those live in the user's
+   home config). Makes "their env" == "my env". *Catches:* an absolute toolchain-home pin, a
+   regional package mirror ahead of the default registry.
+4. **TEST THE ACTUAL TARGET ENV** — run against the real deploy target (the service
+   manager / prod), not a local proxy. *Catches:* env-divergence (worked as a bare
+   process, died under the service manager).
 5. **SIMULATE THE TARGET'S CONSTRAINTS** when you can't get the env — strip local
    conveniences: bare env vars, target's tool versions, no regional mirror. *Catches:*
    prod-only paths.
 6. **STANDING PARITY CHECK** — assert "running reality == declared model" on a schedule:
-   `/opt/Klik/deploy/scripts/klik-deploy-parity.sh` (server-side, `ssh gcp`; scheduled by
-   `klik-parity.service` + `klik-parity.timer`; READ-ONLY — it reports, never restarts).
-   *Catches:* drift after the fact — the one class unit tests structurally cannot see,
-   because they run from the same local state whose divergence IS the bug.
+   a server-side deploy-parity check, scheduled by a timer, **READ-ONLY** (it reports, never
+   restarts). *Catches:* drift after the fact — the one class unit tests structurally cannot
+   see, because they run from the same local state whose divergence IS the bug.
 
 **Can't answer yes to rungs 1–4 → you verified "works on my side," not "works elsewhere."**
 
@@ -263,11 +265,10 @@ trace-before-patch, invariants→checks, and clean-slate. These three are the re
   machine-specific values in shared config, un-reaped cgroups). Installed-alongside = two
   things fighting over one port/file; the bug looks new but is old state never cleaned up.
 
-On false-green specifically (the worst sub-cause), three real traps: loadtest fixtures fed
-**silent audio**; `full-stack-test` asserted session **count** not transcript **content**;
-a `MagicMock` auto-fabricated `cumulative_timestamp_ms` so prod 500'd while CI stayed
-green. Mock only true external boundaries, never the system under test, and assert on
-observable output.
+On false-green specifically (the worst sub-cause), three real traps: a loadtest fed
+**silent/empty input**; an e2e asserted a row **count** not the **content**; a mock
+auto-fabricated a field the code read, so prod 500'd while CI stayed green. Mock only true
+external boundaries, never the system under test, and assert on observable output.
 
 ---
 
@@ -279,8 +280,8 @@ observable output.
 | A bug with no confirmed root cause (whack-a-mole risk) | `investigate` |
 | Any bug/test-fail/perf-regression — build the loop, rank hypotheses, fix root, lock with a correct-seam test | `systematic-debugging` (absorbs `diagnose`, `debugging-strategies`) |
 | Writing the feature/fix test-first (RED→GREEN→refactor, Prove-It) | `test-driven-development` |
-| Verify the change end-to-end in the real target, from clean | `e2e-test`, `klik-ios-e2e-test`, `full-stack-test` |
-| Klik production-rules gate (no hardcode/fallback/mock/backward-compat/overengineering, no silent catch) | `/production-rules-checker` (slash-command; runs the Python validator) |
+| Verify the change end-to-end in the real target, from clean | `e2e-test`, `full-stack-test` |
+| Production-rules gate (no hardcode/fallback/mock/backward-compat/overengineering, no silent catch) | the production-rules gate (a catalog-driven validator, run with `--project <name>`) |
 | Whole-codebase security/perf/architecture deep-scan (SQLi, secrets, N+1, god classes) — **verify each auto-fix, it's aggressive** | `production-code-audit` |
 | Pre-landing structural review (scope-drift, trust boundaries, plan-completion honesty) against `git merge-base`, not raw HEAD | `review` |
 | Land pipeline (tests, coverage gate, bump, PR) — re-runs the WHOLE checklist every time | `ship` |

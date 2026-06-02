@@ -3,7 +3,7 @@
 The `/no-new-bugs` discipline tells you *how* to change code safely. The **sector map** is the
 tool that makes the seven know-before-you-code dimensions **visible and queryable** — for a
 human *and* an agent — in **any** project, any language. This file is the universal design;
-each project instantiates it. **Klik is instance #1.**
+each project instantiates it.
 
 ## The unit: a "sector"
 A sector = a module / service / package you reason about as one thing. Pick the boundary per
@@ -56,5 +56,8 @@ Keystone queries: `blast_radius(symbol)` (who's affected) · `consumers_tests(se
 5. Link **Intent & History** to your ADRs / CONTEXT.md / bug catalog / git.
 6. Stand up the watcher + CLI + live dashboard; add the PreToolUse hook.
 
-## Instances
-- **#1 — Klik** (KMP-Kotlin + Python-FastAPI): PRD `Klik_one/docs/prd/no-new-bugs-system.md` + design `Klik_one/docs/adr/0001-realtime-sector-map.md`. Tech: `tree-sitter-kotlin` + Python `ast` → Neo4j → CLI + React-Flow live dashboard.
+## Reference instantiation
+A worked example targets a statically-typed frontend language + a typed backend language —
+see the PRD ([`../../docs/no-new-bugs-system.md`](../../docs/no-new-bugs-system.md)) and the
+design ([`../../docs/0001-realtime-sector-map.md`](../../docs/0001-realtime-sector-map.md)).
+Tech: `tree-sitter` grammars + each language's AST → Neo4j → CLI + React-Flow live dashboard.

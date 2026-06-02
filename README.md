@@ -13,7 +13,7 @@ because it's the most-worked project so far — that's incident history, not sco
 | Dir | What | Global because |
 |---|---|---|
 | [`no-new-bugs/`](no-new-bugs/) | The protocol (skill): Principle 0 (couple to one source of truth), the change loop, the verification ladder, and the **seven know-before-you-code dimensions** — Structure · Behavior · Context · Boundaries · Intent&History · Change-safety · Tests&Coverage. | Stack-agnostic by construction; every concrete example is explicitly labelled "instance, illustration only." |
-| [`bug-regression-catalog/`](bug-regression-catalog/) | The **one** multi-project incident catalog (`catalog.yaml`) + a single loader that enforces id-uniqueness and **auto-derives each lint's project from its paths** so cross-project bleed is impossible. | One catalog, all projects. Loader markers: `klik · owl · owl-backend · eve` (add more freely). A lint tagged `owl` can never fire on a Klik file, and vice-versa. |
+| [`bug-regression-catalog/`](bug-regression-catalog/) | The **one** multi-project incident catalog (`catalog.yaml`) + a single loader that enforces id-uniqueness and **auto-derives each lint's project from its paths** so cross-project bleed is impossible. | One catalog, all projects. Loader markers: `klik · owl · owl-backend · eve` (add more freely). A lint tagged for one project can never fire on another project's file. |
 | [`docs/`](docs/) | The **sector-map** design — the live per-sector view of the seven dimensions (CLI + dashboard + Neo4j knowledge graph). PRD + ADR-0001. | Instantiable in any repo; the design names projects only as examples. |
 
 ## Per-project instances — examples, not the product
