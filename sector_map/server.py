@@ -22,6 +22,7 @@ SKIP = {".git", "__pycache__", "node_modules", "build", "dist", "DerivedData", "
 # Set in main() from env/args. Default: map owlspace_map (this repo).
 REPO = HERE.parent
 PROFILE = None
+PROFILE_PATH = None  # source of truth on disk; re-read per request so edits go live
 CALL_GRAPH = None  # override the call-graph provider (e.g. "graphify")
 WATCH = HERE.parent          # the subtree the watcher polls (src dir for big repos)
 _VERSION = 0                 # bumped by the watcher whenever WATCH changes
@@ -36,6 +37,11 @@ def _signature() -> float:
         try:
             if p.is_file():
                 newest = max(newest, p.stat().st_mtime)
+        except OSError:
+            pass
+    if PROFILE_PATH:  # a profile edit must also push a live re-render
+        try:
+            newest = max(newest, PROFILE_PATH.stat().st_mtime)
         except OSError:
             pass
     return newest
@@ -74,9 +80,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", html)
         elif self.path.startswith("/api/graph"):
             from extract import build_graph, default_profile
-            prof = PROFILE
+            # Re-read the profile from disk every request: it is the single source
+            # of truth, so a profile edit goes live without a server restart.
+            prof = json.loads(PROFILE_PATH.read_text()) if PROFILE_PATH else PROFILE
             if CALL_GRAPH:  # inject the chosen call-graph provider
-                prof = dict(PROFILE or default_profile(REPO))
+                prof = dict(prof or default_profile(REPO))
                 prof["call_graph"] = CALL_GRAPH
             body = json.dumps(build_graph(REPO, prof)).encode()
             self._send(200, "application/json", body, {"Cache-Control": "no-store"})
@@ -107,7 +115,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global REPO, PROFILE, WATCH, CALL_GRAPH
+    global REPO, PROFILE, PROFILE_PATH, WATCH, CALL_GRAPH
     port = 8765
     a = sys.argv
     if "--port" in a:
@@ -118,7 +126,8 @@ def main():
         REPO = Path(a[a.index("--repo") + 1]).resolve()
         WATCH = REPO
     if "--profile" in a:
-        PROFILE = json.loads(Path(a[a.index("--profile") + 1]).read_text())
+        PROFILE_PATH = Path(a[a.index("--profile") + 1]).resolve()
+        PROFILE = json.loads(PROFILE_PATH.read_text())
         # watch only the source subtree (big repos have huge build/Pods trees)
         if PROFILE.get("src_base"):
             WATCH = REPO / PROFILE["src_base"]
