@@ -277,8 +277,25 @@ rules:
     - conftest.py
     patterns:
     - pattern: (?i)\bCREATE\s+TABLE\b
-      message: raw CREATE TABLE in app code - DB schema changes go through Alembic in klik-infra (direct port 5432), not app code
+      message: raw CREATE TABLE in app code - DB schema changes go through the migration system in db/migrations (golang-migrate), not app code
     - pattern: (?i)\bALTER\s+TABLE\b
-      message: raw ALTER TABLE in app code - DB schema changes go through Alembic in klik-infra (direct port 5432), not app code
+      message: raw ALTER TABLE in app code - DB schema changes go through the migration system in db/migrations (golang-migrate), not app code
     - pattern: (?i)\bDROP\s+TABLE\b
-      message: raw DROP TABLE in app code - DB schema changes go through Alembic in klik-infra, not app code
+      message: raw DROP TABLE in app code - DB schema changes go through the migration system in db/migrations (golang-migrate), not app code
+  LOGGER_USAGE:
+    file_types:
+    - .py
+    exclude_files:
+    - test_
+    - _test.py
+    - tests/
+    - conftest.py
+    - scripts/
+    - __main__.py
+    patterns:
+    - pattern: \bfrom\s+KK_common\.logger\s+import\b
+      message: KK_common.logger is gone - klik-logger is its own repo; use `from KK_logger import get_logger`
+    - pattern: \bLogManager\.setup_logging\s*\(
+      message: LogManager.setup_logging is the pre-split logger - use `get_logger(__name__)` from KK_logger
+    - pattern: (?<![\w.])print\s*\(
+      message: print() in ship-path code - use the structured logger (get_logger from KK_logger)

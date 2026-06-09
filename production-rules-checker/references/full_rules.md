@@ -8,9 +8,10 @@ Applies to both Python (.py) and Kotlin (.kt) code.
 These rules are the machine-checkable enforcement of the team standards registry. When the wiki
 and this file disagree, **the wiki wins** — update this file to match (规范跟代码同源):
 
-- **KLIK 开发规范** (standards index): https://qcnyyz11v8oe.feishu.cn/wiki/X7WVwNea4i4kavkF8e9cUcs8nqg
+- **Klik开发项目约定** (monorepo index — **canonical** when docs disagree): https://qcnyyz11v8oe.feishu.cn/wiki/X7WVwNea4i4kavkF8e9cUcs8nqg → Rules 10 & 13.
 - **KLIK 错误码注册表** (error-code Base `WY9lbE27ya3oTesLf7CcZ3NAnch`): https://qcnyyz11v8oe.feishu.cn/wiki/I7XqwORteiMUdyk4DtJcBwWrntg → Rules 14 & 15.
-- **KLIK 分层架构与服务管理说明** (layering · systemd · klik-infra · Alembic): https://qcnyyz11v8oe.feishu.cn/wiki/R72lwdCgKiV6QXkqA8ncNXGcnjf → Rule 13.
+- **KLIK 分层架构与服务管理说明** (layering · systemd · observability): https://qcnyyz11v8oe.feishu.cn/wiki/R72lwdCgKiV6QXkqA8ncNXGcnjf → Rule 13. *(Note: its migration section — Alembic/klik-infra/direct-5432 — conflicts with the monorepo index, which wins; see Klik#901.)*
+- **002 · 测试规范**: https://qcnyyz11v8oe.feishu.cn/wiki/MH4AwL4L0iB3RdkTehycibRqn7c → the test-pyramid × client/server maturity model.
 
 ## Rule 1: NO ENV FILES
 
@@ -305,15 +306,29 @@ override fun onResume() {
 
 ---
 
-## Rule 10: KK_common/logger USAGE (Python only)
+## Rule 10: KK_logger USAGE (Python only)
 
-**Rationale**: All logging must use ECS-compliant LogManager.
+**Rationale**: All logging must use the ECS-compliant structured logger. `KK_logger` is now its
+own repo (`klik-logger`), pinned by tag, with **zero `KK_common` dependency** — the old
+`KK_common.logger` / `LogManager.setup_logging` path no longer exists. `print()` in ship-path code
+is forbidden.
 
 ### Correct
 
 ```python
+from KK_logger import get_logger
+logger = get_logger(__name__)
+```
+
+### Forbidden
+
+```python
+# ❌ pre-split logger — KK_common.logger was extracted into the klik-logger repo
 from KK_common.logger import LogManager
 logger = LogManager.setup_logging("KK_exec", "api.routes")
+
+# ❌ unstructured output in ship-path code
+print(f"processing {user_id}")
 ```
 
 ---
@@ -330,11 +345,14 @@ logger = LogManager.setup_logging("KK_exec", "api.routes")
 
 ---
 
-## Rule 13: SERVICE & INFRASTRUCTURE TOPOLOGY (systemd / klik-infra / Alembic)
+## Rule 13: SERVICE & INFRASTRUCTURE TOPOLOGY (systemd / monorepo / golang-migrate)
 
-**Source of truth**: wiki "KLIK 分层架构与服务管理说明". The stack is three layers across two repos —
-infrastructure (**klik-infra**: Postgres/Redis/PgBouncer, schema, migrations, backup), application
-(**klik-app** `KK_*` business code), and deploy/ops (**klik-app `deploy/`**, systemd).
+**Source of truth**: wiki "Klik开发项目约定" (the monorepo index, canonical) + "KLIK 分层架构与服务管理说明"
+(systemd/observability). Klik is a **monorepo** (`Klik/`: `KK_*` modules + `config/` + `db/` +
+`deploy/`); logging, observability, infrastructure, and the integrations gateway are split into
+**satellite repos** (`klik-logger`, `klik-observability`, `klik-infra`, `klik-integrations`) that the
+monorepo pulls by tag or calls over HTTP. Schema and migrations live in the monorepo's `db/`; services
+are managed by **systemd** under `deploy/`.
 
 ### Forbidden
 
@@ -346,18 +364,18 @@ klik-watchdog.sh            # polling keep-alive — replaced by systemd Restart
 ```
 
 ```python
-# ❌ Raw schema DDL in application code — schema lives in klik-infra/Alembic
+# ❌ Raw schema DDL in application code — schema goes through the migration system (db/migrations)
 cursor.execute("CREATE TABLE ...")
 cursor.execute("ALTER TABLE ...")
 
 # ❌ DB deploy details embedded in KK_* app code
-DB_PASSWORD = "..."          # app knows only a connection ADDRESS
+DB_PASSWORD = "..."          # app knows only a connection ADDRESS (from config/secrets/database.yaml)
 ```
 
 ### Correct
 
 ```bash
-# ✅ Add a service: drop deploy/services/<svc>.env (WORKDIR / PORT / EXEC), then:
+# ✅ Add a service: drop deploy/services/<svc>.env (WORKDIR / PORT / EXEC), update deploy/ports.md, then:
 sudo deploy/scripts/install-systemd.sh   # no new unit, no new restart script
 
 # ✅ Manage a service
@@ -365,11 +383,14 @@ systemctl restart klik@<svc>             # one service
 systemctl restart klik.target            # whole stack
 journalctl -u klik@<svc> -f              # logs
 
-# ✅ Change DB schema: edit the model, generate an Alembic revision in klik-infra.
-#    Migrations connect to the DIRECT Postgres port 5432, NOT PgBouncer 6432
-#    (transaction pooling breaks multi-statement DDL).
+# ✅ Change DB schema: golang-migrate SQL files in db/migrations/, committed in the SAME
+#    commit as Scripts/sql_lint/schema_columns.yaml. The DB URL comes from
+#    config/secrets/database.yaml → postgresql.dev_url (VPS PgBouncer).
+migrate create -ext sql -dir db/migrations -seq describe_change
 
-# ✅ Bring up the DB locally via klik-infra docker compose — never hand-install Postgres.
+# ✅ Deploy via the scripts, never by editing files on the server:
+bash deploy/scripts/klik-deploy.sh [<svc>]   # full or single service
+bash deploy/scripts/klik-rollback.sh
 ```
 
 ---

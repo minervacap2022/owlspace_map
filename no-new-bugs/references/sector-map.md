@@ -22,6 +22,18 @@ Only #1 is fully parseable; #2–#7 are *anchored* onto the structural backbone 
 links, overlays, and a test panel. **Structure is the cheap half; the regressions live in the
 other six** — which is why no off-the-shelf code-graph tool (it draws only #1) is enough.
 
+### Overlay: the test-maturity matrix (dimensions #4 × #7)
+For any contract with **parallel implementations** (dimension #4 — client↔server, an
+`expect`/`actual` pair, two SDKs of one API), render the Tests overlay (#7) as a grid:
+*(each side of the boundary)* × *(unit · integration · e2e)*, each cell carrying a maturity
+mark (✅ ready · ⚠️ thin · ❌ missing) plus an explicit **gap list**. This makes the uncovered
+surface of a *cross-boundary* change visible at a glance, and turns "is the **other** side
+tested too?" into a rendered cell instead of a thing you must remember to ask — the same
+invariant guarded on only one side of a client↔server pair is a half-built guard, and the grid
+shows the hole. *(Instance, illustration only: a 2-client × 3-layer grid where the
+client↔backend integration cell is ⚠️ "contract test only, no hermetic client↔real-backend
+layer" — a real gap surfaced as a cell rather than discovered in production.)*
+
 ## Three layers (universal)
 - **Map** — a live graph of sectors carrying the seven dimensions.
 - **Gates** — checks that make the invisible dimensions fail loud (guards/CI, a deploy-parity check, a bug catalog, contract linters).

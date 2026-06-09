@@ -65,7 +65,12 @@ So the rule inverts:
    undocumented behavior. Those are invisible to types and tests, so depending on them
    is the true domino collapse — change a private detail, break a distant caller,
    nothing warns you. Before depending on anything, ask: *"a stated contract, or
-   someone's guts?"* Couple freely to **contracts**. Never couple to **guts**.
+   someone's guts?"* Couple freely to **contracts**. Never couple to **guts**. A
+   **layered** architecture (domain ← application ← infrastructure; resource-vs-ops;
+   library-vs-consumer) is this rule made *physical*: inner layers expose contracts,
+   outer layers depend inward only — so "depend on contracts, never on guts" becomes a
+   *directory invariant* a guard can grep (the domain layer importing the web framework
+   is a violation you can detect mechanically).
 5. **Partition along the contract seams — this is DB normal forms.** Deciding *where
    to cut* (what becomes its own table/module/service, what narrow key joins them) is
    the design act that makes "one fact, one home" achievable. Normalize = each fact
@@ -86,6 +91,10 @@ Proof, in generic shapes you will recognize:
 - **Drift across parallel implementations →** a client↔server contract (a DTO) defined
   twice, once on each side, silently diverges; one shared, typed schema removes the
   second copy so a breaking change fails loud instead of drifting.
+- **One name, one schema →** the same identifier carrying two shapes is duplication-drift
+  at the data layer: one metric name emitted with two different label sets, or one DTO
+  field serialized two ways on two code paths. One identifier must mean **one schema
+  everywhere**, or every consumer joins across the variants by hand.
 
 ---
 
@@ -186,9 +195,12 @@ shared one (that is how duplication-drift starts).
 run** — *not* from the state you are holding. Local-green is rung 1 of 6; climb the ladder
 (next section). "Proven end-to-end" means **every entry path**, not the happy one — assert
 on observable output (return value, HTTP status, file on disk, rendered result), never on
-"it ran" or a count. The clean run is often multi-step (worktree → build → install →
-launch) — script it. Use an e2e harness for client↔backend and a full-stack harness for
-3+ services.
+"it ran" or a count. When a **structured** signal exists (a registered error code, a
+correlation-id log line), assert on **it**, not just a coarse proxy like an HTTP status: a
+test that asserts only `403` passes for the *wrong* 403; asserting the error code pins the
+actual cause and is what lets a failure be traced by *code + log line* later. The clean run
+is often multi-step (worktree → build → install → launch) — script it. Use an e2e harness
+for client↔backend and a full-stack harness for 3+ services.
 
 ### (5) Guard against recurrence  → the production-rules gate, `production-code-audit`, `review`
 A fix is not done when it's green; it's done when it **can't silently come back**, and the
@@ -215,6 +227,15 @@ latency to pre-merge.
   the prevention system itself once fell to this meta-bug (a guard authored but never
   committed). This standing, self-running alarm is exactly what makes Principle 0's
   aggressive coupling safe.
+- **Make "I did X everywhere" a verified invariant — not a claim.** When a fix means
+  applying the same property to *every* member of a set (every service registers the shared
+  handler, every route emits a coded error, every DTO field is wired onto the request), the
+  regression is the *next* member added without it. Write a guard that **enumerates the set
+  and asserts the property on each**, so a new member missing it fails loud — "all N wired"
+  stops being a sentence you wrote once and becomes a check that re-proves itself on every
+  change. *(Instance, illustration only: a test that discovers every web-app object at import
+  and asserts each one installed the shared exception handler — a service created without it
+  turns the suite red.)*
 
 *(Reaching for `production-code-audit`: verify every auto-fix — it violates surgical-diff
 by default.)*
@@ -232,6 +253,10 @@ by default.)*
    Different machine/region/clean checkout. *Catches:* machine/region-specific assumptions
    (hardcoded paths, regional mirrors). CI's whole value is the fresh checkout that exposes
    every implicit local assumption — that is why you watch it go green, not why you skip it.
+   When CI is genuinely unavailable (private repo, no paid runner), the floor is a
+   **committed pre-push hook running the same suite** — slower, and skippable with
+   `--no-verify`, but it keeps the loop *committed and runnable from a clean checkout*, which
+   is what this rung is really about. An **uncommitted** local hook is not a feedback loop.
 3. **PIN + DECLARE THE ENV** — tool versions (`toolchain`/`.tool-versions`/Docker), deps in
    a **lockfile**, ZERO machine-specific paths/mirrors in the repo (those live in the user's
    home config). Makes "their env" == "my env". *Catches:* an absolute toolchain-home pin, a
@@ -295,7 +320,12 @@ trace-before-patch, invariants→checks, and clean-slate. These three are the re
 On false-green specifically (the worst sub-cause), three real traps: a loadtest fed
 **silent/empty input**; an e2e asserted a row **count** not the **content**; a mock
 auto-fabricated a field the code read, so prod 500'd while CI stayed green. Mock only true
-external boundaries, never the system under test, and assert on observable output.
+external boundaries, never the system under test, and assert on observable output. And
+prefer an **in-memory implementation of your own port** (a real `InMemoryFooRepository`
+satisfying the same interface the production code depends on) over a hand-set mock: it
+exercises real logic and, because it implements the contract, **cannot drift** the way a
+mock's fabricated return can — the third trap above is impossible when the test double is
+bound by the same typed interface as the real one.
 
 ---
 
