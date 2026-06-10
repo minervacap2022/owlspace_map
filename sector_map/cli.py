@@ -48,17 +48,26 @@ def brief(g, name):
     if not s:
         return {"error": f"no sector or file {name!r}; sectors: {[x['id'] for x in g['sectors']]}"}
     d = s["dimensions"]
+    tc = {k: d["tests_coverage"][k]
+          for k in ("coverage_label", "covered", "test_count", "uncovered_surface")}
+    if d["tests_coverage"].get("matrix"):
+        tc["matrix"] = {layer: f"{c['mark']} {c['count']}"
+                        for layer, c in d["tests_coverage"]["matrix"].items()}
     return {
         "sector": sid, "kind": s["kind"], "loc": s["loc"], "files": s["file_count"],
+        "purpose": s.get("purpose"),
         "1_structure": {"depends_on": d["structure"]["depends_on"],
-                         "symbols": len(d["structure"]["symbols"])},
-        "2_behavior": d["behavior"]["invariants"],
+                         "symbols": len(d["structure"]["symbols"]),
+                         "schema": [f"{x['name']} ({x['kind']}: {', '.join(x['fields'][:6])})"
+                                    for x in d["structure"].get("schema", [])[:10]]},
+        "2_behavior": {"invariants": d["behavior"]["invariants"],
+                        "forbidden": d["behavior"].get("constraints", {}).get("forbidden", []),
+                        "required": d["behavior"].get("constraints", {}).get("required", [])},
         "3_context": d["context"],
         "4_boundaries": d["boundaries"],
         "5_intent_history": d["intent_history"],
         "6_change_safety": d["change_safety"],
-        "7_tests_coverage": {k: d["tests_coverage"][k]
-                             for k in ("coverage_label", "covered", "test_count", "uncovered_surface")},
+        "7_tests_coverage": tc,
     }
 
 
@@ -92,6 +101,16 @@ def coverage(g, _):
     return {s["id"]: s["dimensions"]["tests_coverage"]["coverage_label"] for s in g["sectors"]}
 
 
+def contextmap(g, _):
+    """The DDD context-map layer: typed edges + declared-vs-parsed findings.
+    Findings are the gate — a declared pattern the parse contradicts is a bug."""
+    cm = g.get("contextmap", {})
+    return {"findings": cm.get("findings", []),
+            "edges": [f"{e['src']} → {e['dst']}  [{e['relationship']}"
+                      + (f" · {e['pattern']}" if e.get("pattern") else "") + f"] ×{e['weight']}"
+                      for e in cm.get("edges", [])]}
+
+
 def uncovered(g, name):
     sid = _resolve_sector(g, name)
     s = _find(g, sid)
@@ -120,7 +139,7 @@ def init(argv):
 CMDS = {
     "list": lambda g, _: [s["id"] for s in g["sectors"]],
     "brief": brief, "blast-radius": blast_radius, "consumers-tests": consumers_tests,
-    "coverage": coverage, "uncovered": uncovered,
+    "coverage": coverage, "uncovered": uncovered, "contextmap": contextmap,
 }
 
 

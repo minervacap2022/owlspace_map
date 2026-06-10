@@ -1,0 +1,77 @@
+{
+  "label": "owlspace_map",
+  "lang": "py",
+  "git_root": ".",
+  "src_base": "",
+  "test_base": "",
+  "import_prefix": "",
+  "resolve": "py_stem",
+  "behavior": [
+    [
+      "duplicate id",
+      "id-uniqueness guard (raises on a duplicate catalog id)"
+    ],
+    [
+      "CATALOG_LOAD_FAILED",
+      "fail-loud: a malformed catalog can't report green"
+    ],
+    [
+      "missing fields",
+      "required-fields guard on every catalog entry"
+    ],
+    [
+      "presence:\\s*forbidden|presence:\\s*required",
+      "explicit forbidden/required lint intent"
+    ],
+    [
+      "_lint_project|project_of",
+      "per-lint project isolation (no cross-project bleed)"
+    ],
+    [
+      "token_hex|collision-free",
+      "collision-free random id minting"
+    ],
+    [
+      "assertRegex|assertEqual|assertGreater",
+      "committed unit-test assertions"
+    ],
+    [
+      "globs and not any\\(matches_glob",
+      "path-scoped lint matching"
+    ]
+  ],
+  "catalog_project": null,
+  "sectors": [
+    {
+      "id": "bug-regression-catalog",
+      "root": "bug-regression-catalog"
+    },
+    {
+      "id": "docs",
+      "root": "docs"
+    },
+    {
+      "id": "no-new-bugs",
+      "root": "no-new-bugs"
+    },
+    {
+      "id": "production-rules-checker",
+      "root": "production-rules-checker"
+    },
+    {
+      "id": "scripts",
+      "root": "scripts"
+    },
+    {
+      "id": "sector_map",
+      "root": "sector_map"
+    }
+  ],
+  "boundaries_global": [],
+  "boundaries_by_sector": {},
+  "deploy_symlinks": true,
+  "scip_index": null,
+  "scip_root": ".",
+  "purpose": "The agent-development OS: no-new-bugs protocol + sector map + bug catalog + production-rules gate.",
+  "error_code_pattern": null
+}

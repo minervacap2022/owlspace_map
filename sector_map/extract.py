@@ -23,6 +23,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+import collectors
+
 DEFAULT_REPO = Path(__file__).resolve().parent.parent
 SKIP_DIRS = {".git", "__pycache__", "node_modules", "build", "dist", "graphify-out"}
 TEXT_SUFFIX = {".py", ".md", ".yaml", ".yml", ".sh", ".txt", ".json", ".html", ".kt"}
@@ -411,9 +413,9 @@ def _behavior(blob: str, patterns) -> list[str]:
     return [desc for pat, desc in patterns if re.search(pat, blob)]
 
 
-def _catalog_entries(project: str | None) -> list[tuple[str, str, list]]:
-    """(id, title, source_files) for catalog entries (optionally one project),
-    read raw so a momentarily-broken catalog never blocks the map."""
+def _catalog_entries(project: str | None) -> list[tuple[str, str, list, str | None]]:
+    """(id, title, source_files, observable_signal) for catalog entries (optionally
+    one project), read raw so a momentarily-broken catalog never blocks the map."""
     cat = DEFAULT_REPO / "bug-regression-catalog" / "catalog.yaml"
     if not cat.exists():
         return []
@@ -428,7 +430,8 @@ def _catalog_entries(project: str | None) -> list[tuple[str, str, list]]:
                 continue
             if project and project_of(b.get("source_files")) != project:
                 continue
-            out.append((b.get("id"), b.get("title", ""), b.get("source_files") or []))
+            out.append((b.get("id"), b.get("title", ""), b.get("source_files") or [],
+                        b.get("observable_signal")))
         return out
     except Exception:
         return []
@@ -517,9 +520,11 @@ def default_profile(repo: Path) -> dict:
     # matching (kt_pkg). Relative imports (JS/TS ./, C/C++ #include) resolve automatically
     # regardless of mode. Set import_prefix in a tuned profile for precise package edges.
     resolve = "py_stem" if lang == "py" else "kt_pkg"
+    # behavior is [] by default (P5): GUARD_SIGNS are owlspace_map's OWN invariants
+    # and belong in its committed .sectormap.json, not in every fresh repo's map.
     return {"label": repo.name, "lang": lang, "git_root": ".", "src_base": "",
             "test_base": "", "import_prefix": "", "resolve": resolve,
-            "behavior": GUARD_SIGNS, "catalog_project": None, "sectors": sectors,
+            "behavior": [], "catalog_project": None, "sectors": sectors,
             "boundaries_global": [], "boundaries_by_sector": {}, "deploy_symlinks": True,
             "scip_index": "index.scip" if (repo / "index.scip").exists() else None, "scip_root": "."}
 
@@ -700,12 +705,12 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     incidents = _catalog_entries(prof.get("catalog_project")) if prof.get("catalog_project") else []
     remote = _git(git_root, ["remote", "get-url", "origin"])
     catalog_projects: dict = {}
-    if not is_kt:
+    if any(s["id"] == "bug-regression-catalog" for s in prof["sectors"]):  # self-map only
         from_cat = _catalog_entries(None)
         sys.path.insert(0, str(DEFAULT_REPO / "bug-regression-catalog" / "scripts"))
         try:
             from load_catalog import project_of  # type: ignore
-            catalog_projects = dict(sorted(Counter(project_of(s) for _, _, s in from_cat).items(),
+            catalog_projects = dict(sorted(Counter(project_of(s) for _, _, s, _ in from_cat).items(),
                                            key=lambda kv: -kv[1]))
         except Exception:
             catalog_projects = {}
@@ -724,40 +729,55 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         recent = _git(git_root, ["log", "--oneline", "-5", "--", gitpath]).splitlines()
         total_commits = len(_git(git_root, ["log", "--oneline", "--", gitpath]).splitlines())
 
-        # Behavior
+        # Behavior: regex invariants + the structured forbidden/required card (P1)
         invariants = _behavior(blob, prof["behavior"])
+        constraints = s.get("constraints") or {"forbidden": [], "required": []}
 
-        # Context
+        # P1: the sector card — purpose from the profile, else auto-ingested from
+        # the sector's own CLAUDE.md/README.md (the KK_auth convention, generalized).
+        card = collectors.sector_card(r["dir"]) if r["dir"].exists() else {"purpose": None, "docs": []}
+        purpose = s.get("purpose") or card["purpose"]
+        sector_docs = [str(Path(p).relative_to(repo)) for p in card["docs"]] + s.get("docs", [])
+
+        # Context (#4): GENERIC — env vars + outbound URLs from the code, any language.
         deploy = _deploy_symlinks(sid, repo) if prof.get("deploy_symlinks") else []
-        deps_used = []
-        if is_kt:
-            if "@Serializable" in blob:
-                deps_used.append("kotlinx.serialization")
-            if "Environment" in blob or "ApiConfig" in blob:
-                deps_used.append("Environment config")
-            for plat in ("iosMain", "androidMain"):
-                if (repo / prof["src_base"].replace("commonMain", plat) / s["root"]).exists():
-                    deps_used.append(f"{plat} actuals")
-        else:
-            if "import yaml" in blob or "safe_load" in blob:
-                deps_used.append("PyYAML")
-            if (r["dir"] / ".gitignore").exists():
-                deps_used.append(".gitignore")
+        env_vars = collectors.env_reads(r["code"])
+        urls = collectors.outbound_urls(r["code"])
+
+        # Schema (#5): data shapes + SQL DDL across the sector's files.
+        schema = []
+        for f in r["files"]:
+            if f.suffix in (".py", ".kt", ".kts", ".ts", ".tsx", ".go", ".sql"):
+                schema += collectors.schema_defs(f)
 
         # Boundaries
         boundaries_ext = ([f"git remote → {remote}"] if remote else []) + deploy
         boundaries_ext += prof.get("boundaries_by_sector", {}).get(sid, [])
         boundaries_ext += prof.get("boundaries_global", [])
+        boundaries_ext += [f"talks to → {u}" for u in urls[:8]]
         crossproject = []
-        if not is_kt and sid == "bug-regression-catalog" and catalog_projects:
+        if sid == "bug-regression-catalog" and catalog_projects:
             crossproject = [f"{k}: {v} incidents" for k, v in catalog_projects.items()]
-        if not is_kt and sid == "production-rules-checker":
-            rd = r["dir"] / "rules"
-            crossproject = [f"rules/{p.stem}.yaml" for p in sorted(rd.glob("*.yaml"))] if rd.exists() else []
+        rd = r["dir"] / "rules"
+        if rd.is_dir() and list(rd.glob("*.yaml")):
+            crossproject += [f"rules/{p.stem}.yaml" for p in sorted(rd.glob("*.yaml"))]
 
-        # Intent & History: + past incidents from the catalog (KMP mode)
-        sector_incidents = [t for (_, t, srcs) in incidents
-                            if any(f"app/{s['root']}/" in str(sf) for sf in srcs)]
+        # Intent & History: incidents whose source paths fall under this sector's
+        # root (generic), keeping the legacy app/<root>/ KMP layout matching.
+        def _hits(srcs):
+            return any(f"/{s['root']}/" in f"/{sf}" or f"app/{s['root']}/" in str(sf)
+                       for sf in srcs)
+        sector_incidents = [t for (_, t, srcs, _) in incidents if _hits(srcs)]
+        # G13: the catalog's observable_signal = "how you'd know THIS broke again".
+        sector_signals = [{"incident": t, "signal": sig}
+                          for (_, t, srcs, sig) in incidents if sig and _hits(srcs)]
+
+        # G13 observability: log-emit surface + error-code cross-reference.
+        log_n = collectors.log_sites(r["code"], prof.get("log_patterns"))
+        ec_pattern = prof.get("error_code_pattern")
+        test_paths = [repo / tf for tf in r["tfiles"]]
+        err_codes = (collectors.error_codes(r["code"], test_paths, ec_pattern)
+                     if ec_pattern else None)
 
         # Tests & Coverage: REAL line coverage when a report exists, else test counts.
         lines_total = lines_cov = 0
@@ -783,8 +803,21 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         kind = ("code+data" if r["code"] and any(f.suffix in {".yaml", ".yml"} for f in r["files"])
                 else "kotlin" if is_kt and r["code"] else "code" if r["code"] else "docs")
 
+        matrix = collectors.test_matrix(r["tfiles"], prof.get("tests"))
+        # observability is now MEASURED (log sites, unasserted codes), not a guess
+        obs_parts = []
+        if r["code"]:
+            obs_parts.append(f"{log_n} log sites" if log_n else "⚠ silent — no log emit surface")
+        if err_codes and err_codes["unasserted"]:
+            obs_parts.append(f"⚠ {len(err_codes['unasserted'])} error codes never test-asserted")
+        if covered:
+            obs_parts.append("tests")
+        if invariants:
+            obs_parts.append("guards")
+
         sectors_meta.append({
             "id": sid, "kind": kind, "loc": r["loc"], "file_count": len(r["files"]),
+            "purpose": purpose,
             "dimensions": {
                 "structure": {"files": sorted(str(f.relative_to(repo)) for f in r["files"])[:60],
                               "loc": r["loc"], "symbols": sorted(set(r["symbols"]))[:40],
@@ -792,20 +825,25 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                               "hot_symbols": [{"name": x["name"], "file": x["file"], "line": x["line"],
                                                "in": x["inc"], "out": len(x["out"])}
                                               for x in sorted(sector_syms.get(sid, []), key=lambda z: -z["inc"])[:8]],
-                              "depends_on": deps},
-                "behavior": {"invariants": invariants},
-                "context": {"deploy": deploy, "deps": deps_used},
+                              "depends_on": deps,
+                              "schema": schema[:30]},
+                "behavior": {"invariants": invariants, "constraints": constraints},
+                "context": {"deploy": deploy, "env": env_vars[:30], "urls": urls[:12]},
                 "boundaries": {"external": boundaries_ext, "cross_project": crossproject},
                 "intent_history": {"total_commits": total_commits, "recent": recent,
-                                   "past_incidents": sector_incidents},
+                                   "past_incidents": sector_incidents,
+                                   "docs": sector_docs},
                 "change_safety": {"blast_radius": blast, "blast_count": len(blast),
                                   "cycles": cyc,
                                   "called_by_sectors": sorted({a for (a, b) in sector_calls if b == sid}),
-                                  "observability": ("unit tests + guards" if covered
-                                                    else "guards only" if invariants else "none")},
+                                  "log_sites": log_n,
+                                  "error_codes": err_codes,
+                                  "observable_signals": sector_signals[:8],
+                                  "observability": " · ".join(obs_parts) if obs_parts else "none"},
                 "tests_coverage": {"test_files": r["tfiles"], "test_count": r["tcount"],
                                    "covered": covered, "coverage_label": cov_label,
-                                   "coverage_pct": cov_pct, "uncovered_surface": uncovered},
+                                   "coverage_pct": cov_pct, "uncovered_surface": uncovered,
+                                   "matrix": matrix},
             },
         })
 
@@ -814,10 +852,17 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     symbols_out = [{"id": x["id"], "name": x["name"], "sector": x["sector"], "file": x["file"],
                     "line": x["line"], "kind": x["kind"], "inc": x["inc"], "out": x["out"]}
                    for x in syms.values()]
+    # P3: relationship-typed edges + declared-vs-parsed findings (context-map layer)
+    declared = prof.get("edges", [])
+    contextmap = {"edges": collectors.typed_edges(hard, declared),
+                  "declared": declared,
+                  "findings": collectors.contextmap_findings(hard, declared)}
+
     return {"repo": prof.get("label", repo.name), "repo_path": str(repo),
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "remote": remote, "profile_source": profile_source,
-            "sectors": sectors_meta, "edges": edges,
+            "purpose": prof.get("purpose"),
+            "sectors": sectors_meta, "edges": edges, "contextmap": contextmap,
             "symbols": symbols_out, "call_resolution": call_resolution,
             "sector_calls": [{"src": a, "dst": b, "weight": w} for (a, b), w in sector_calls.items()]}
 

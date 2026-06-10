@@ -10,7 +10,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 VENDOR="${1:-$HOME/Owlspace_re}/apps/owlspace/resources/sector_map"
-CORE_FILES=(extract.py cli.py server.py scip_ingest.py graphify_ingest.py)
+CORE_FILES=(extract.py cli.py server.py collectors.py scip_ingest.py graphify_ingest.py)
 
 if [ ! -d "$VENDOR" ]; then
   echo "vendor-sync: $VENDOR absent — skipping (not an error off the app machine)"

@@ -144,6 +144,7 @@
     </div>
   </div>
 
+  <div id="cmfindings"></div>
   <h2 class="sec">sectors — all seven dimensions, live from the working dir</h2>
   <div class="cards" id="cards"></div>
 </div>
@@ -273,21 +274,32 @@ function dval(name,d){
   const D=d.dimensions;
   if(name==="structure"){const st=D.structure;return `<div class="li"><span class="muted">loc</span> ${st.loc} · <span class="muted">files</span> ${d.file_count} · <span class="muted">symbols</span> ${st.symbol_count||st.symbols.length} <a class="drill" onclick="openDrill('${d.id}')">⤢ call graph</a></div>`+
     `<div class="li"><span class="muted">depends on</span> ${chips(st.depends_on,"")}</div>`+
+    ((st.schema||[]).length?`<div class="li"><span class="muted">schema</span> ${st.schema.slice(0,8).map(x=>`<span class="chip" title="${esc((x.fields||[]).join(', '))}">${esc(x.name)} <span class="mut">·${(x.fields||[]).length}f</span></span>`).join("")}</div>`:"")+
     (st.hot_symbols&&st.hot_symbols.length?`<div class="li"><span class="muted">hot symbols</span> ${st.hot_symbols.map(h=>`<span class="chip" title="${esc(h.file)}:${h.line}">${esc(h.name)} <span class="mut">·${h.in}</span></span>`).join("")}</div>`:"");}
-  if(name==="behavior")return D.behavior.invariants.length?D.behavior.invariants.map(i=>`<div class="li">✓ ${esc(i)}</div>`).join(""):`<span class="muted">no enforced invariants (docs)</span>`;
+  if(name==="behavior"){const b=D.behavior,c=b.constraints||{forbidden:[],required:[]};
+    return (b.invariants.length?b.invariants.map(i=>`<div class="li">✓ ${esc(i)}</div>`).join(""):"")+
+      (c.forbidden.length?`<div class="li"><span class="muted">forbidden</span> ${chips(c.forbidden,"red")}</div>`:"")+
+      (c.required.length?`<div class="li"><span class="muted">required</span> ${chips(c.required,"green")}</div>`:"")+
+      (!b.invariants.length&&!c.forbidden.length&&!c.required.length?`<span class="muted">no enforced invariants (docs)</span>`:"");}
   if(name==="context")return `<div class="li"><span class="muted">deploy</span> ${chips(D.context.deploy.map(x=>x.split(" → ")[0].replace(/^.*\/.claude/,"~/.claude").replace(/^.*\/.git-hooks/,"~/.git-hooks")))}</div>`+
-    `<div class="li"><span class="muted">deps</span> ${chips(D.context.deps)}</div>`;
+    ((D.context.env||[]).length?`<div class="li"><span class="muted">env</span> ${chips(D.context.env)}</div>`:"")+
+    ((D.context.urls||[]).length?`<div class="li"><span class="muted">talks to</span> ${chips(D.context.urls.map(u=>u.replace(/^https?:\/\//,"").split("/")[0]))}</div>`:"")+
+    ((D.context.deps||[]).length?`<div class="li"><span class="muted">deps</span> ${chips(D.context.deps)}</div>`:"");
   if(name==="boundaries")return `<div class="li"><span class="muted">external</span> ${chips(D.boundaries.external.map(x=>x.replace(/^git remote → /,"git: ").replace(/^.*\/.claude/,"~/.claude").replace(/^.*\/.git-hooks/,"~/.git-hooks")))}</div>`+
     (D.boundaries.cross_project.length?`<div class="li"><span class="muted">cross-project</span> ${chips(D.boundaries.cross_project)}</div>`:"");
-  if(name==="intent & history")return `<div class="li"><span class="muted">${D.intent_history.total_commits} commits</span></div>`+
-    D.intent_history.recent.map(c=>`<div class="li mono">${esc(c)}</div>`).join("");
+  if(name==="intent & history")return `<div class="li"><span class="muted">${D.intent_history.total_commits} commits</span>${(D.intent_history.docs||[]).length?` · ${chips(D.intent_history.docs.map(x=>x.split("/").pop()))}`:""}</div>`+
+    D.intent_history.recent.map(c=>`<div class="li mono">${esc(c)}</div>`).join("")+
+    ((D.intent_history.past_incidents||[]).length?`<div class="li"><span class="muted">past incidents</span> ${chips(D.intent_history.past_incidents,"red")}</div>`:"");
   if(name==="change-safety"){const cs=D.change_safety;return `<div class="li"><span class="muted">direct consumers (import)</span> ${chips(cs.blast_radius.length?cs.blast_radius:["leaf — nothing imports it"],cs.blast_radius.length?"":"mut")}</div>`+
     (cs.called_by_sectors&&cs.called_by_sectors.length?`<div class="li"><span class="muted">called by (fn-level)</span> ${chips(cs.called_by_sectors)}</div>`:"")+
     (cs.cycles&&cs.cycles.length?`<div class="li"><span class="muted">⚠ dependency cycle with</span> ${chips(cs.cycles,"red")}</div>`:"")+
-    `<div class="li"><span class="muted">observability</span> ${esc(cs.observability)}</div>`;}
+    `<div class="li"><span class="muted">observability</span> ${/⚠/.test(cs.observability)?`<span class="chip red">${esc(cs.observability)}</span>`:esc(cs.observability)}</div>`+
+    (cs.error_codes&&cs.error_codes.unasserted&&cs.error_codes.unasserted.length?`<div class="li"><span class="muted">codes never test-asserted</span> ${chips(cs.error_codes.unasserted,"red")}</div>`:"")+
+    ((cs.observable_signals||[]).length?`<details><summary class="muted">${cs.observable_signals.length} observable signals (how you'd know it broke)</summary>${cs.observable_signals.map(x=>`<div class="li mono" title="${esc(x.signal)}">${esc(x.incident)}</div>`).join("")}</details>`:"");}
   if(name==="tests & coverage"){const t=D.tests_coverage;
     const bar=t.coverage_pct!=null?`<div class="covbar"><div style="width:${t.coverage_pct}%;background:${t.coverage_pct>=70?'var(--green)':t.coverage_pct>=40?'var(--amber)':'var(--red)'}"></div></div>`:"";
-    return `<div class="li"><span class="muted">coverage</span> ${t.covered?`<span class="chip green">${esc(t.coverage_label)}</span>`:`<span class="chip ${t.uncovered_surface.length?'red':'mut'}">${esc(t.coverage_label)}</span>`}</div>`+bar+
+    const mx=t.matrix?`<div class="li"><span class="muted">layers</span> ${["unit","integration","e2e"].map(l=>`<span class="chip ${t.matrix[l].count?'green':'red'}">${t.matrix[l].mark} ${l} ${t.matrix[l].count}</span>`).join("")}</div>`:"";
+    return `<div class="li"><span class="muted">coverage</span> ${t.covered?`<span class="chip green">${esc(t.coverage_label)}</span>`:`<span class="chip ${t.uncovered_surface.length?'red':'mut'}">${esc(t.coverage_label)}</span>`}</div>`+bar+mx+
       (t.test_files.length?`<div class="li mono">${t.test_files.map(esc).join("<br>")}</div>`:"")+
       (t.uncovered_surface.length?`<details><summary class="" style="color:#ffb4ab">${t.uncovered_surface.length} uncovered symbols — test first</summary><div class="mono">${t.uncovered_surface.map(esc).join("<br>")}</div></details>`:"");
   }
@@ -302,9 +314,15 @@ function renderCards(g){
     const card=el("div","sc");card.id="card-"+s.id;
     card.innerHTML=`<div class="top"><span class="name">${esc(s.id)}</span><span class="k">${esc(s.kind)}</span>${badge}`+
       `<span class="badge blast">blast ${blast}</span></div>`+
+      (s.purpose?`<div class="dimrow"><div class="dn"><b>※</b>purpose</div><div class="dv">${esc(s.purpose)}</div></div>`:"")+
       DIMS.map(([n,name])=>`<div class="dimrow"><div class="dn"><b>${n}</b>${esc(name)}</div><div class="dv">${dval(name,s)}</div></div>`).join("");
     C.appendChild(card);
   });
+  // context-map findings: declared-vs-parsed mismatches are FINDINGS, shown loud
+  const cm=g.contextmap, host=document.getElementById("cmfindings");
+  if(host)host.innerHTML=(cm&&cm.findings.length)?
+    `<h2 class="sec">context-map findings — declared vs parsed</h2>`+
+    cm.findings.map(f=>`<div class="li"><span class="chip ${/never observed/.test(f)?'mut':'red'}">${esc(f)}</span></div>`).join(""):"";
 }
 
 // ── drill-down: per-sector symbol call graph (force layout) ──────────────────
