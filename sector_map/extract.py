@@ -524,10 +524,38 @@ def default_profile(repo: Path) -> dict:
             "scip_index": "index.scip" if (repo / "index.scip").exists() else None, "scip_root": "."}
 
 
+# ── the bound profile (working-directory level, never machine level) ───────────
+# The profile is the "section data schema" that gives a human/agent sufficient
+# context for THIS working dir. Its one canonical home is a committed file at the
+# repo root, so it travels with the code (every clone, every machine) instead of
+# living in a per-machine cache. Both the CLI and the app discover it here.
+BOUND_PROFILE_NAME = ".sectormap.json"
+
+
+def bound_profile(repo: Path) -> dict | None:
+    """Parse <repo>/.sectormap.json if committed, else None. Tolerant: a malformed
+    file warns to stderr and falls through to the auto-detected default rather than
+    crashing the map."""
+    p = repo / BOUND_PROFILE_NAME
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        print(f"[sectormap] ignoring malformed {p}: {e}", file=sys.stderr)
+        return None
+
+
 # ── the one builder ───────────────────────────────────────────────────────────
 def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> dict:
     repo = Path(repo) if repo else DEFAULT_REPO
-    prof = profile or default_profile(repo)
+    # Precedence: explicit profile arg → committed <repo>/.sectormap.json → default.
+    if profile is not None:
+        prof, profile_source = profile, "explicit"
+    elif (bound := bound_profile(repo)) is not None:
+        prof, profile_source = bound, "bound"
+    else:
+        prof, profile_source = default_profile(repo), "default"
     lang = prof.get("lang", "py")
     src_base = repo / prof["src_base"] if prof.get("src_base") else repo
     test_base = repo / prof["test_base"] if prof.get("test_base") else None
@@ -788,7 +816,8 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                    for x in syms.values()]
     return {"repo": prof.get("label", repo.name), "repo_path": str(repo),
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "remote": remote, "sectors": sectors_meta, "edges": edges,
+            "remote": remote, "profile_source": profile_source,
+            "sectors": sectors_meta, "edges": edges,
             "symbols": symbols_out, "call_resolution": call_resolution,
             "sector_calls": [{"src": a, "dst": b, "weight": w} for (a, b), w in sector_calls.items()]}
 

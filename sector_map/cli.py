@@ -105,8 +105,10 @@ def init(argv):
     a starter profile you can then tune. This is how you 'initiate the map' on a new repo."""
     repo = Path(argv[argv.index("--repo") + 1]).resolve() if "--repo" in argv else DEFAULT_REPO
     prof = default_profile(repo)
+    # Default home is the working-dir-bound file <repo>/.sectormap.json — committed with
+    # the code so the tuned profile travels with every clone (NOT a per-machine cache).
     out = (Path(argv[argv.index("--out") + 1]) if "--out" in argv
-           else Path(__file__).resolve().parent / "profiles" / f"{repo.name.lower().replace(' ', '-')}.json")
+           else repo / ".sectormap.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(prof, indent=2))
     return {"initiated": str(repo), "profile": str(out),

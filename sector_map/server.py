@@ -22,9 +22,10 @@ SKIP = {".git", "__pycache__", "node_modules", "build", "dist", "DerivedData", "
 # Set in main() from env/args. Default: map owlspace_map (this repo).
 REPO = HERE.parent
 PROFILE = None
-PROFILE_PATH = None  # source of truth on disk; re-read per request so edits go live
+PROFILE_PATH = None  # ONLY an explicit --profile; re-read per request so edits go live
 CALL_GRAPH = None  # override the call-graph provider (e.g. "graphify")
 WATCH = HERE.parent          # the subtree the watcher polls (src dir for big repos)
+WATCH_PROFILE_PATH = None    # profile file the watcher polls (explicit OR bound .sectormap.json)
 _VERSION = 0                 # bumped by the watcher whenever WATCH changes
 
 
@@ -39,9 +40,9 @@ def _signature() -> float:
                 newest = max(newest, p.stat().st_mtime)
         except OSError:
             pass
-    if PROFILE_PATH:  # a profile edit must also push a live re-render
+    if WATCH_PROFILE_PATH:  # a profile edit must also push a live re-render
         try:
-            newest = max(newest, PROFILE_PATH.stat().st_mtime)
+            newest = max(newest, WATCH_PROFILE_PATH.stat().st_mtime)
         except OSError:
             pass
     return newest
@@ -76,15 +77,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            html = (HERE / "dashboard.html").read_bytes()
-            self._send(200, "text/html; charset=utf-8", html)
+            # The OwlSpace app renders the graph natively (React), so dashboard.html
+            # is intentionally NOT vendored here. Serve a small status page instead of
+            # crashing on a missing file — the client only uses /api/graph + /api/events.
+            html = (HERE / "dashboard.html")
+            if html.exists():
+                self._send(200, "text/html; charset=utf-8", html.read_bytes())
+            else:
+                body = json.dumps({"ok": True, "api": ["/api/graph", "/api/events"],
+                                   "note": "headless engine — graph rendered by the OwlSpace app"}).encode()
+                self._send(200, "application/json", body, {"Cache-Control": "no-store"})
         elif self.path.startswith("/api/graph"):
-            from extract import build_graph, default_profile
-            # Re-read the profile from disk every request: it is the single source
-            # of truth, so a profile edit goes live without a server restart.
-            prof = json.loads(PROFILE_PATH.read_text()) if PROFILE_PATH else PROFILE
-            if CALL_GRAPH:  # inject the chosen call-graph provider
-                prof = dict(prof or default_profile(REPO))
+            from extract import build_graph, bound_profile, default_profile
+            # build_graph owns profile resolution (explicit arg → committed
+            # <repo>/.sectormap.json → default) and re-reads it per call, so a profile
+            # edit goes live without a restart. Only --profile is passed explicitly;
+            # the bound/default cases pass None so discovery + labeling stay correct.
+            prof = json.loads(PROFILE_PATH.read_text()) if PROFILE_PATH else None
+            if CALL_GRAPH:  # inject the chosen call-graph provider onto the active profile
+                prof = dict(prof or bound_profile(REPO) or default_profile(REPO))
                 prof["call_graph"] = CALL_GRAPH
             body = json.dumps(build_graph(REPO, prof)).encode()
             self._send(200, "application/json", body, {"Cache-Control": "no-store"})
@@ -115,7 +126,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global REPO, PROFILE, PROFILE_PATH, WATCH, CALL_GRAPH
+    global REPO, PROFILE, PROFILE_PATH, WATCH, WATCH_PROFILE_PATH, CALL_GRAPH
+    from extract import bound_profile
     port = 8765
     a = sys.argv
     if "--port" in a:
@@ -125,15 +137,26 @@ def main():
     if "--repo" in a:
         REPO = Path(a[a.index("--repo") + 1]).resolve()
         WATCH = REPO
+    # Explicit --profile wins (PROFILE_PATH set → passed to build_graph as "explicit").
+    # Otherwise build_graph itself discovers the committed <repo>/.sectormap.json and
+    # labels it "bound"; here we only locate that file so the watcher live-reloads on
+    # edits, and read it (tolerantly) for the WATCH-narrowing src_base + the banner label.
+    prof_meta = None
     if "--profile" in a:
         PROFILE_PATH = Path(a[a.index("--profile") + 1]).resolve()
-        PROFILE = json.loads(PROFILE_PATH.read_text())
+        PROFILE = prof_meta = json.loads(PROFILE_PATH.read_text())  # operator-supplied: surface errors
+        WATCH_PROFILE_PATH = PROFILE_PATH
+    else:
+        bound = REPO / ".sectormap.json"
+        if bound.is_file():
+            WATCH_PROFILE_PATH = bound.resolve()  # live-reload on edits even if malformed (gets fixed in place)
+            prof_meta = bound_profile(REPO)       # None if malformed → default map, no crash
+    if prof_meta and prof_meta.get("src_base"):
         # watch only the source subtree (big repos have huge build/Pods trees)
-        if PROFILE.get("src_base"):
-            WATCH = REPO / PROFILE["src_base"]
+        WATCH = REPO / prof_meta["src_base"]
     threading.Thread(target=_watch, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    label = (PROFILE or {}).get("label", REPO.name)
+    label = (prof_meta or {}).get("label", REPO.name)
     print(f"sectormap live → http://127.0.0.1:{port}   [{label}]   (watching {WATCH}, Ctrl-C to stop)")
     try:
         srv.serve_forever()
