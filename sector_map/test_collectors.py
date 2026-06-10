@@ -245,3 +245,14 @@ class BuildGraphIntegration(unittest.TestCase):
         g = self._graph()
         self.assertIn("contextmap", g)
         self.assertTrue(isinstance(g["contextmap"]["findings"], list))
+
+
+class LogPatternExtension(unittest.TestCase):
+    """A project's own logger idiom (profile log_patterns) must count — the
+    'silent sector' claim must not lie about a repo that logs differently."""
+
+    def test_profile_log_patterns_extend_defaults(self):
+        d = _write({"a.kt": 'fun f() { KlikLogger.e("boom") ; KlikLogger.d("dbg") }'})
+        self.assertEqual(collectors.log_sites([d / "a.kt"]), 0)  # defaults miss it
+        self.assertEqual(collectors.log_sites([d / "a.kt"],
+                                              [r"\bKlikLogger\.[deiw]\("]), 2)
