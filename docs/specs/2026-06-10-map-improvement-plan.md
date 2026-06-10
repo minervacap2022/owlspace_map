@@ -39,6 +39,7 @@ per-project data, never as Klik logic in the engine.
 | 6 | 修改历史 | ⚠ `git log -5` + catalog incidents (path match `app/<root>/` = Klik-shaped) | no why/ADR/doc links; incident matching generic-path needed (G7) |
 | 7 | 三类测试覆盖 | ⚠ unit-test counting + Cobertura line coverage | no unit/integration/e2e **classification**, no test-maturity matrix (sector-map.md describes it; nothing renders it), no CI pass/fail ingest (G8) |
 | 8 | 目标和动机 | ❌ none | no purpose field anywhere (G9) |
+| + | 可观测性 (logs/error codes) | ❌ `observability` is a 3-value prose string; catalog `observable_signal` (68 entries) never surfaced on the map | no log-emit-surface extraction, no error-code registry cross-ref (raised vs. test-asserted), no observable_signal in the brief (G13) |
 
 **Engine hygiene gaps:**
 - **G10 — SSOT drift**: the vendored `Owlspace_re/resources/sector_map` has `bound_profile()`
@@ -111,6 +112,45 @@ all data, zero engine logic:
   optional junit-xml path like coverage.xml is read today.
 - **Incidents (#6, G7)**: generalize catalog matching from `app/<root>/` to "any source_file path
   under the sector root" so non-Klik projects' incidents anchor correctly.
+- **Observability: logs + error codes (G13)** — the real content of the Change-safety dimension's
+  "how would I know it broke". Today `observability` is a 3-value string ("unit tests + guards" /
+  "guards only" / "none") — prose, not data. Generalize the Klik pattern (structured logger +
+  5-char error-code registry + per-incident `observable_signal`) into three generic collectors:
+  - **Log signals**: per-language logger-call extraction (the logger call sites in a sector =
+    its emit surface). Profile names the logger idiom (`get_logger`/`KlikLogger`/`console.*`/
+    `slog`/`tracing`); default = common idioms per language. A sector with code but zero log
+    sites renders "⚠ silent sector — no log emit surface".
+  - **Error-code registry**: profile points at a registry source (a doc table like Klik's
+    `docs/error-codes.md`, a codes module, or an enum); extractor cross-references which codes a
+    sector raises vs. which are asserted in its tests. An error code raised but never asserted in
+    any test = a failure path with no guard — render it like uncovered_surface.
+  - **observable_signal surfacing**: the catalog already carries `observable_signal` per incident
+    (68 in catalog.yaml today); the brief currently shows only incident titles. Attach the
+    signal text to the sector's Change-safety panel so "how to detect recurrence" is one
+    glance, not a catalog lookup.
+
+### Decision: context maps COMPLEMENT tree-sitter, they don't replace it
+
+Considered and rejected replacing the tree-sitter extraction with Context Mapper / context-map
+tooling. Reasoning (verified against ContextMapper/context-map-discovery):
+
+- **Different layers.** A context map is the *strategic* layer: which bounded contexts exist and
+  what relationship pattern governs each pair (OHS/ACL/Conformist/…). Tree-sitter feeds the
+  *evidence* layer: which imports/calls/symbols actually exist. The DDD patterns are mostly
+  **social/contractual facts** (who conforms to whom, where an ACL is intended) — not derivable
+  from parsing in any language. Drop the parser and the map becomes hand-asserted prose with no
+  drift detection; drop the patterns and edges have no meaning. The value is the *diff*:
+  parsed reality vs. declared intent ("profile says `data → domain` is ACL-isolated, but the
+  parser found 3 direct imports bypassing the boundary" — that's a findable bug).
+- **Context Mapper's own discovery library concedes this**: its reverse-engineering strategies are
+  Java-reflection over Spring Boot annotations + docker-compose parsing — single-ecosystem, far
+  narrower than our 19-language tree-sitter coverage, and unmaintainable as our core (JVM
+  dependency, classpath scanning). CML is valuable as a **notation**, not as an engine.
+- Also: blast radius, call graphs, uncovered surface, per-symbol coverage — the PRD's keystone
+  queries — all need symbol-level edges that no context-map tool produces.
+
+So: keep tree-sitter as the evidence backbone; adopt CML's *vocabulary* in the profile (P3);
+optionally *emit* CML for interop. Declared-vs-parsed mismatches become first-class findings.
 
 ### P3 — Context-map semantics on the graph (1–2 days)
 - Type the edges: keep parsed `depends_on` weights, overlay profile-declared DDD patterns (the
@@ -118,6 +158,10 @@ all data, zero engine logic:
   from existing cycle detection; flag cycles as **Big-Ball-of-Mud risk** in the brief.
 - `sectormap contextmap` CLI: emit the typed map; optional **CML export** (ContextMapper format) so
   teams can use Context Mapper's generators — export only, never a dependency.
+- **Declared-vs-parsed mismatch check**: every profile-declared pattern implies a parseable
+  expectation (Separate Ways → zero edges; ACL → downstream imports only via the named adapter
+  module; Shared Kernel → the shared dir is the only cross-import surface). The brief flags
+  violations — this is where context-map semantics earn their keep as a gate, not a drawing.
 - Dashboard + brief honor "small maps for explicit questions": filter the map by question
   (`--question deps|contracts|tests`).
 
