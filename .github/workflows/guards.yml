@@ -28,7 +28,7 @@ jobs:
       - name: CLI tests (path→sector, risk-first consumers, init)
         run: cd sector_map && python3 test_cli.py
       - name: Collector tests (schema, env, test-matrix, observability, context-map)
-        run: cd sector_map && python3 -m pytest test_collectors.py -q
+        run: cd sector_map && python3 test_collectors.py
 
   catalog:
     runs-on: ubuntu-latest
