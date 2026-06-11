@@ -137,6 +137,23 @@ def _get_parser(lang: str):
     return _parsers[lang]
 
 
+# Suffixes the stdlib fallback can still extract WITHOUT tree-sitter (see
+# _fallback_symbols): Python via `ast`, Kotlin via regex. Everything else in LANGS
+# needs tree-sitter — on a runtime without it, those files extract to nothing.
+_FALLBACK_SUFFIXES = {".py", ".kt", ".kts"}
+
+
+def _treesitter_available() -> bool:
+    """Whether the tree-sitter language pack actually imports in this runtime. False on
+    e.g. minerva (no pip → no _deps): then only _FALLBACK_SUFFIXES extract, the rest
+    degrade to EMPTY — which must be reported as 'no extractor', not silent empty."""
+    try:
+        import tree_sitter_language_pack  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 _tree_cache: dict = {}  # path -> (mtime, (grammar, root_node, def_types))
 
 
@@ -858,10 +875,32 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                   "declared": declared,
                   "findings": collectors.contextmap_findings(hard, declared)}
 
+    # Extraction fidelity — make "empty because no extractor for this language"
+    # DISTINGUISHABLE from "empty repo" (re-applied; #25 dropped #24's signal on a pre-#24
+    # base). Without tree-sitter only _FALLBACK_SUFFIXES (py/kt) extract; any OTHER known
+    # code language present then yields EMPTY symbols. Report it so a Rust repo on a no-pip
+    # host (e.g. minerva) shows "no extractor for rust", not a silent blank map.
+    ts_ok = _treesitter_available()
+    code_suffixes = {f.suffix for r in raw.values() for f in r.get("code", [])}
+    degraded = sorted({
+        LANGS[suf][0] for suf in code_suffixes
+        if suf in LANGS and not ts_ok and suf not in _FALLBACK_SUFFIXES
+    })
+    extraction = {
+        "treesitter": ts_ok,
+        "degraded_languages": degraded,
+        "note": (
+            "" if not degraded
+            else "no extractor for: " + ", ".join(degraded)
+            + " (tree-sitter language pack not installed on this runtime; "
+            "symbols/imports/calls for these languages are empty, not absent)"
+        ),
+    }
+
     return {"repo": prof.get("label", repo.name), "repo_path": str(repo),
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "remote": remote, "profile_source": profile_source,
-            "purpose": prof.get("purpose"),
+            "purpose": prof.get("purpose"), "extraction": extraction,
             "sectors": sectors_meta, "edges": edges, "contextmap": contextmap,
             "symbols": symbols_out, "call_resolution": call_resolution,
             "sector_calls": [{"src": a, "dst": b, "weight": w} for (a, b), w in sector_calls.items()]}

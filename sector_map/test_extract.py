@@ -201,6 +201,20 @@ class SelfMap(unittest.TestCase):
         for s in g["sectors"]:
             self.assertEqual(set(s["dimensions"]) & seven, seven, f"{s['id']} missing a dimension")
 
+    def test_graph_always_carries_extraction_fidelity_signal(self):
+        """The `extraction` block (treesitter/degraded_languages/note) MUST be on every
+        graph — it's what makes 'empty because no extractor' distinguishable from 'empty
+        repo' (the silent-empty-Rust bug on a no-pip host). This guard lives in the
+        CANONICAL repo so a future engine edit that drops it goes RED here, not only in
+        the app's vendored copy — #25 dropped #24's signal precisely because the only
+        guard was app-side. (Root cause: SSOT drift; see check-vendor-sync.sh.)"""
+        g = extract.build_graph()
+        self.assertIn("extraction", g, "graph must carry the extraction-fidelity signal")
+        ex = g["extraction"]
+        self.assertIn("treesitter", ex)
+        self.assertIsInstance(ex["degraded_languages"], list)
+        self.assertIn("note", ex)
+
 
 class DominantLang(unittest.TestCase):
     """default_profile auto-detects the dominant language → right lang + resolve mode,
