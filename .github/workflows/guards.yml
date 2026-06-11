@@ -27,6 +27,8 @@ jobs:
         run: cd sector_map && python3 test_extract.py
       - name: CLI tests (path→sector, risk-first consumers, init)
         run: cd sector_map && python3 test_cli.py
+      - name: Collector tests (schema, env, test-matrix, observability, context-map)
+        run: cd sector_map && python3 test_collectors.py
 
   catalog:
     runs-on: ubuntu-latest
@@ -41,3 +43,21 @@ jobs:
         run: cd bug-regression-catalog && python3 scripts/test_load_catalog.py
       - name: Chaos — catalog has no lying guards
         run: cd bug-regression-catalog && bash scripts/chaos/catalog_no_lying_guards.sh
+
+  # Aggregate gate for the nexora rs1 ruleset (required status check = "ci-success").
+  # Without it EVERY PR here is BLOCKED forever — the rule was added org-wide but this
+  # repo had no job emitting the context (owl-agent#30, owl-backend#2 got theirs; this
+  # repo was missed). `if: always()` so it runs even when an upstream job fails, then
+  # fails the gate explicitly — a skipped required check also blocks the merge.
+  ci-success:
+    needs: [sector-map, catalog]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: gate
+        run: |
+          if [ "${{ needs.sector-map.result }}" != "success" ] || \
+             [ "${{ needs.catalog.result }}" != "success" ]; then
+            echo "upstream job failed"; exit 1
+          fi
+          echo "all upstream jobs green"
