@@ -33,6 +33,13 @@ know-before-you-code dimensions, instantiable in any repo (see
 **bugless** — or, honestly, force any bug to defeat a *visible, enforced* signal instead of
 slipping past an *invisible* one.
 
+> **Design-time companion: `no-bugs-first`.** This skill is the *change-time* floor (don't
+> regress this edit). When the unit of work is a **whole repo** — starting a new service or
+> refactoring/redesigning an existing one — reach for **`no-bugs-first`** instead: it applies
+> this same doctrine at repo scale (impose the layered structure, lay the guard + `ci-success`
+> spine, ship a validated `.sectormap.json` so the repo maps cleanly). Same doctrine, two entry
+> points; that skill *invokes* these principles rather than copying them.
+
 ---
 
 ## PRINCIPLE 0 — Couple to ONE source of truth; the enemy is duplication-drift
@@ -202,11 +209,33 @@ actual cause and is what lets a failure be traced by *code + log line* later. Th
 is often multi-step (worktree → build → install → launch) — script it. Use an e2e harness
 for client↔backend and a full-stack harness for 3+ services.
 
-### (5) Guard against recurrence  → the production-rules gate, `production-code-audit`, `review`
+### (5) Guard against recurrence  → `repo-guards`, `production-code-audit`, `review` (+ your project's hard-rules gate)
 A fix is not done when it's green; it's done when it **can't silently come back**, and the
 window matters: a bug caught at change-time costs ~nothing, the same bug caught by a human
 on a release build days later is the expensive failure mode. Shorten the detection
 latency to pre-merge.
+
+> **Generic principle (every project):** a project's coding rules have **one canonical home**
+> (a policy doc / a guards script), and the rule is enforced by an **executable arm** that encodes
+> it as a runnable check. Reference that home; never paraphrase a rule into a third copy
+> (duplication-drift, Principle 0). When a rule changes, change the canonical home and its check
+> **in the same change**. `repo-guards` (`~/.claude/lib/guards/repo-guards.sh`) is the
+> stack-agnostic starter for this.
+>
+> *Instance #1 — KLIK:* the canonical home is `nexora-policy/policy/` (`policy/01` fail-fast,
+> `policy/05` commit gates, `policy/07` service layout, `policy/08` skills-system); the executable
+> arm is the **KLIK-only** `production-rules-checker` skill, which encodes them as categories
+> (including the `policy/07` layering gates `DDD_DOMAIN_PURITY` / `DDD_APP_BOUNDARY` /
+> `DB_ONLY_IN_REPOS` / `SERVICE_INSTRUMENTED` / `DEPLOY_PARITY`). On a non-KLIK repo, the *shape*
+> is the same but the home and the gate are that project's own.
+- **Keep the architecture map honest — a structural change updates the model in the SAME commit.**
+  If the repo has a committed architecture profile (`.sectormap.json` feeding the sector/context
+  map), a change that adds a module, moves a package, or creates a cross-context dependency must
+  update the profile in the same commit and keep the map's findings at zero (no cycle, no stale
+  declared edge, no fallback render). The profile and the code are one fact — letting them drift is
+  the duplication-drift Principle 0 forbids. Generic rule in `nexora-policy/policy/09-map-hygiene.md`;
+  the *KLIK instance* of the gate is `Scripts/check_map_hygiene.sh` in `ci-success`. Reach zero by
+  honest bounded-context grouping, never by hiding a real cycle.
 - **Turn the prose-landmine into a CHECK.** When a bug class recurs, or a doc says
   "always/never X", add a guard/test that fails loudly. Universal starter:
   `~/.claude/lib/guards/repo-guards.sh` — the **script** (copy into the repo's `scripts/`,
@@ -338,7 +367,8 @@ bound by the same typed interface as the real one.
 | Any bug/test-fail/perf-regression — build the loop, rank hypotheses, fix root, lock with a correct-seam test | `systematic-debugging` (absorbs `diagnose`, `debugging-strategies`) |
 | Writing the feature/fix test-first (RED→GREEN→refactor, Prove-It) | `test-driven-development` |
 | Verify the change end-to-end in the real target, from clean | `e2e-test`, `full-stack-test` |
-| Production-rules gate (no hardcode/fallback/mock/backward-compat/overengineering, no silent catch) | the production-rules gate (a catalog-driven validator, run with `--project <name>`) |
+| Turn a recurring invariant into a project-agnostic pre-merge guard wired into CI | `repo-guards` (`~/.claude/lib/guards/repo-guards.sh`; prove it BOTH directions — passes clean, fails on a planted violation) |
+| Your project's hard-rules gate (no hardcode/fallback/mock/backward-compat/overengineering, no silent catch, layering) | the project's own validator. *KLIK-only instance:* `production-rules-checker` (`--staged`/`--full-scan`/`--category`/`--json`), the executable arm of `nexora-policy`. On other repos, use that repo's equivalent. |
 | Whole-codebase security/perf/architecture deep-scan (SQLi, secrets, N+1, god classes) — **verify each auto-fix, it's aggressive** | `production-code-audit` |
 | Pre-landing structural review (scope-drift, trust boundaries, plan-completion honesty) against `git merge-base`, not raw HEAD | `review` |
 | Land pipeline (tests, coverage gate, bump, PR) — re-runs the WHOLE checklist every time | `ship` |
