@@ -157,7 +157,11 @@ can't see:**
   and especially the **uncovered surface** you're about to touch. A parser sees test *files*;
   it does NOT see what they *cover*, whether they *pass*, or the gap. Run the covering tests
   green *before* you touch anything; if the path is uncovered, write the test FIRST. → the
-  missing/lying feedback loop behind a whole recurring-bug class; the low-coverage areas.
+  missing/lying feedback loop behind a whole recurring-bug class; the low-coverage areas. A
+  test is done when it is **captured**, not merely green: if the project ships per-test
+  telemetry to a dashboard, confirm the run still emits it (a passing-but-invisible test is a
+  blind spot). *KLIK instance:* the emitter→otel→ES→Grafana chain governed by
+  `nexora-policy/policy/02-testing.md` (Test visibility); see `Klik:docs/testing/running-and-monitoring.md`.
 
 Structure goes in the sector graph; these six mostly do NOT — anchor them as guards, a
 deploy-parity gate, `CONTEXT.md` / ADRs, the catalog, and a coverage/test map, or the agent
