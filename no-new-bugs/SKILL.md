@@ -314,12 +314,17 @@ by default.)*
 Two professional, **hermetic** test layers exist (built 2026-06-03) — reach for these as the fast
 pass/fail signal before touching the relevant code, and *extend* them rather than re-deriving:
 
-- **Backend isolated-DB integration** — the `KK_inttest` uv package (repo `minervacap2022/Klik`)
-  stands up a throwaway `pgvector/pgvector:pg16` container, bootstraps the *authoritative* schema
-  (`docker/infra/init/00-extensions.sql` + `01-schema.sql`), and redirects the whole stack's
-  `db_manager` to it via a **guarded `KLIK_TEST_DB_URL`** override in `KK_postgresql/config.py` (a
-  conftest guard ABORTS unless it resolved to the container — these tests never touch prod). Clean
-  slate per test. Run: `bash KK_inttest/scripts/run-integration-tests.sh` (needs Docker).
+- **Backend isolated-DB integration** — per-module `KK_*/tests/integration` (repo
+  `minervacap2022/Klik`) run against ONE shared throwaway `pgvector/pgvector:pg16` container. The
+  harness `Scripts/inttest/start-db.sh` bootstraps the *authoritative* schema
+  (`db/migrations/000001_baseline.up.sql` + later migrations + `Scripts/inttest/seed.sql` reference
+  data) and redirects the whole stack's `db_manager` via a **guarded `KLIK_TEST_DB_URL`** override in
+  `KK_db/config.py` (the session guard in `KK_common/testing/fixtures/inttest_db.py` ABORTS unless it
+  resolved to the container — these tests never touch prod). Clean slate per test. A module opts in
+  with `pytest_plugins = ["KK_common.testing.fixtures.inttest_db"]`. Run:
+  `eval "$(bash Scripts/inttest/start-db.sh)"; uv run pytest KK_*/tests/integration -m integration`
+  (needs Docker). Cross-service contract tests (error envelope/registry/emitter) live in
+  `KK_common/tests/contract` with `@pytest.mark.contract` (hermetic, no Docker).
 - **Frontend client wire-contracts** — `BackendAuthApiContractTest` drives the real request DTOs
   through the real `encodeDefaults=false` Json via an injected fake transport, pinning the 403
   landmine (`age_confirmed_over_13` / `accept_biometric_consent` must stay on the `/register` wire).
