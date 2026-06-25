@@ -1,0 +1,55 @@
+# Template: CI with the `ci-success` aggregate check required by the OWLNexora
+# enterprise ruleset (nexora-policy rs1-baseline-main). Adapt jobs to the stack;
+# the terminal `ci-success` job name is the contract — keep it EXACTLY `ci-success`,
+# and list EVERY other job in `needs`.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # --- adapt these to the stack (examples for bun/TS; swap for python/go/kmp) ---
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test
+
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/repo-guards.sh
+
+  # --- the contract: ONE job named exactly ci-success, needs ALL the above ---
+  ci-success:
+    needs: [lint, typecheck, test, guards]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: gate
+        run: |
+          for r in "${{ needs.lint.result }}" "${{ needs.typecheck.result }}" \
+                   "${{ needs.test.result }}" "${{ needs.guards.result }}"; do
+            if [ "$r" != "success" ]; then echo "upstream job failed: $r"; exit 1; fi
+          done
+          echo "all gates green"

@@ -1,0 +1,30 @@
+{
+  "label": "MyService (backend · bun/TS, DDD)",
+  "lang": "ts",
+  "git_root": ".",
+  "src_base": "src",
+  "test_base": "test",
+  "import_prefix": "",
+  "resolve": "kt_pkg",
+  "catalog_project": "myservice",
+  "deploy_symlinks": false,
+  "sectors": [
+    {"id": "domain", "root": "domain"},
+    {"id": "application", "root": "application"},
+    {"id": "infrastructure", "root": "infrastructure"},
+    {"id": "interfaces", "root": "interfaces"},
+    {"id": "shared", "root": "shared"}
+  ],
+  "behavior": [
+    ["process\\.env\\.[A-Z_]+\\s*\\?\\?|getenv\\([^)]*,", "⚠ env fallback default — forbidden (fail-fast / no-fallback)"],
+    ["z\\.object|interface |type [A-Z]\\w+\\s*=", "typed contract (single source of truth)"],
+    ["throw new \\w*Error", "explicit error surface (no silent catch)"],
+    ["catch\\s*\\([^)]*\\)\\s*\\{\\s*\\}", "⚠ empty catch — silent failure, forbidden"]
+  ],
+  "boundaries_global": [
+    "client↔server DTOs live once in shared/contracts — never a second hand-kept copy"
+  ],
+  "boundaries_by_sector": {
+    "infrastructure": ["Postgres :5432 · Redis :6379 — the only sector allowed to import the DB driver"]
+  }
+}
