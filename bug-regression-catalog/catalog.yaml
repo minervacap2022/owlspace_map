@@ -3146,3 +3146,40 @@ bugs:
     - Owl/Sources/**/ProviderStore.swift
     message: Gateway API keys can omit model-group and allow-other-models — these fields MUST be optional
       (? in Swift) or JSONDecoder rejects the entire response.
+- id: BUG-2026-06-24-a113c7
+  title: Avatar upload magic-byte-only validation persists undecodable images served as 200
+  date: '2026-06-24'
+  surface: backend
+  source_files:
+  - KK_auth/src/routers/profile_avatar_router.py
+  user_visible_symptom: |
+    Avatar fails to decode on the client and falls back to initials:
+    "[WARN][AvatarImage] load failed ... Failed to Image::makeFromEncoded".
+    The avatar endpoint returns HTTP 200 + Content-Type image/jpeg but a body
+    whose first bytes are a valid JPEG SOI+APP0 marker (passing the old 3-byte
+    magic sniff) and whose remainder is not a decodable image. Skia rejects it
+    on every render. A Content-Type gate does NOT help — headers are valid;
+    only the bytes are corrupt. Fix: full-decode (Pillow im.load()) at upload
+    time for jpeg/png/webp and reject undecodable bodies with 415, so a
+    non-image is never persisted or served. HEIC keeps magic-only (no base
+    Pillow codec). GitHub issue minervacap2022/Klik_one#113.
+  observable_signal: |
+    For any served avatar URL, the body must fully decode, not merely start
+    with a valid magic marker:
+      curl -sS "<avatar_url>" -o /tmp/a.img && python3 -c "from PIL import Image; Image.open('/tmp/a.img').load()"
+    exit 0 = decodable (regression not present). Non-zero / OSError
+    "Truncated File Read" = an undecodable image was persisted and served = the
+    upload validator regressed to magic-only.
+  lint:
+  - rule: AVATAR_UPLOAD_DECODE_VALIDATED
+    pattern: if not _is_decodable_image\(
+    presence: required
+    path: KK_auth/src/routers/profile_avatar_router.py
+    message: |
+      upload_avatar() must call _is_decodable_image(data, mime) after the
+      magic-byte check — magic bytes are necessary but not sufficient (issue
+      #113). Removing it lets a body that passes the 3-byte sniff but fails a
+      real decode be persisted and served as a 200 avatar the client cannot
+      render.
+  chaos:
+    runner: null
