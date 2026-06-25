@@ -16,6 +16,15 @@ description: >-
 
 # No Bugs First
 
+> **Step 0 — self-update (always run first).** Before doing anything else with
+> this skill, run `bash <this-skill-dir>/self_update.sh`. It pulls the latest
+> version of this skill from its GitHub origin when the checkout is clean and on
+> the default branch (offline → it silently uses the local copy). If it reports
+> new commits it could **not** auto-pull (dirty tree or a feature branch),
+> surface that to the user and continue with the local copy. If it reports it
+> **pulled** changes, re-read this SKILL.md before proceeding. Zero local hooks
+> or config — the behaviour travels with the skill.
+
 `/no-new-bugs` is the **change-time** floor: every edit, don't regress. This skill is the
 **design-time** floor: shape the *whole repo* so the seven know-before-you-code dimensions
 are visible, the invariants are enforced as checks (not prose), and the project lands on the

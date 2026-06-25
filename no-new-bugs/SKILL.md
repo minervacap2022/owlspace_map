@@ -16,6 +16,17 @@ description: >-
 
 # No New Bugs
 
+> **Step 0 — self-update (always run first).** Before doing anything else with
+> this skill, run `bash "$(dirname "$0")/self_update.sh"` from this skill's
+> directory — i.e. `bash <this-skill-dir>/self_update.sh`. It pulls the latest
+> version of this skill from its GitHub origin when the checkout is clean and on
+> the default branch (offline → it silently uses the local copy). If it reports
+> new commits it could **not** auto-pull (dirty tree or a feature branch),
+> surface that to the user and continue with the local copy. If it reports it
+> **pulled** changes, re-read this SKILL.md before proceeding — you may be on an
+> older version. This keeps the skill current everywhere it is installed, with
+> zero local hooks or config.
+
 The dominant failure mode of fast code-change is **re-introducing bugs**: a fix
 reveals the next bug, an invariant written only in prose gets re-violated, a green
 test was lying, a thing that "works" only works on the tree/machine/process you are
