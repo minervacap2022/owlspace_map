@@ -44,20 +44,39 @@ jobs:
       - name: Chaos — catalog has no lying guards
         run: cd bug-regression-catalog && bash scripts/chaos/catalog_no_lying_guards.sh
 
+  # Producer-gate lint — the executable arm of nexora-policy policy/08 §4 (§7 step 3):
+  # every skill declaring `tier: producer` MUST carry a non-empty `gates:` block, or it
+  # is non-conforming. Before this job that contract was prose only, so a producer could
+  # land ungated (no-bugs-first shipped with none). See nexora-policy#48.
+  producer-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install PyYAML
+      - name: Lint test (fires on a planted violation, passes clean)
+        run: cd scripts && python3 test_check_producer_gates.py
+      - name: Every producer skill declares a gates block
+        run: python3 scripts/check_producer_gates.py
+
   # Aggregate gate for the nexora rs1 ruleset (required status check = "ci-success").
   # Without it EVERY PR here is BLOCKED forever — the rule was added org-wide but this
   # repo had no job emitting the context (owl-agent#30, owl-backend#2 got theirs; this
   # repo was missed). `if: always()` so it runs even when an upstream job fails, then
   # fails the gate explicitly — a skipped required check also blocks the merge.
   ci-success:
-    needs: [sector-map, catalog]
+    needs: [sector-map, catalog, producer-gates]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: gate
         run: |
           if [ "${{ needs.sector-map.result }}" != "success" ] || \
-             [ "${{ needs.catalog.result }}" != "success" ]; then
+             [ "${{ needs.catalog.result }}" != "success" ] || \
+             [ "${{ needs.producer-gates.result }}" != "success" ]; then
             echo "upstream job failed"; exit 1
           fi
           echo "all upstream jobs green"
