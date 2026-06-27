@@ -12,6 +12,13 @@ description: >-
   structurally hard and the map stays clean"). Reach for it on: "start a new
   service", "refactor this repo properly", "set this project up cleanly", "make
   this show on the map".
+tier: producer
+gates:
+  - repo-guards
+  - map-hygiene
+  - production-rules-checker
+  - prd-hygiene
+  - commit-policy
 ---
 
 # No Bugs First
