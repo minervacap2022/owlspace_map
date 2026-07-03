@@ -124,6 +124,7 @@ bugs:
     - Test.kt
   chaos:
     runner: chaos/failed_session_render.sh
+    ios_edge: true
     description: Create a synthetic failed session; assert /api/v1/meetings returns title="" and status="failed",
       never a fabricated date.
   observable_signal: 'curl /api/v1/meetings | jq ''.items[] | select(.status=="failed").title''

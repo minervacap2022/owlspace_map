@@ -15,7 +15,7 @@ from __future__ import annotations
 import unittest
 
 from load_catalog import (
-    load, lint_patterns, required_guards,
+    load, lint_patterns, required_guards, chaos_runners,
     _globs_of, _lint_project, _intent,
 )
 
@@ -112,6 +112,17 @@ class CatalogLoaderInvariants(unittest.TestCase):
         # Same for a forbidden Owl lint.
         self.assertIn("OWL_CLAUDECMD_NO_RAW_RESOLVE", all_forb)
         self.assertNotIn("OWL_CLAUDECMD_NO_RAW_RESOLVE", klik_forb)
+
+    def test_ios_edge_chaos_is_klik_product_only(self):
+        ids = {bug_id for bug_id, *_ in chaos_runners(ios_edge=True)}
+        self.assertIn("BUG-2026-05-28-C", ids)
+        self.assertNotIn("BUG-2026-06-03-df0347", ids)
+        self.assertNotIn("BUG-2026-06-03-461e97", ids)
+        for bug_id in ids:
+            bug = next(b for b in load() if b["id"] == bug_id)
+            self.assertEqual(_lint_project([], bug.get("source_files")), "klik")
+            self.assertNotEqual(bug.get("surface"), "tooling-ci")
+            self.assertIs((bug.get("chaos") or {}).get("ios_edge"), True)
 
 
 if __name__ == "__main__":
