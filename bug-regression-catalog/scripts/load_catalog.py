@@ -194,9 +194,31 @@ def required_guards(projects=None) -> list[tuple[str, str, str, list[str]]]:
     return out
 
 
-def chaos_runners() -> list[tuple[str, str, str]]:
+def _is_klik_ios_edge_runner(bug: dict) -> bool:
+    """True when a chaos runner is safe to execute inside Klik iOS e2e.
+
+    The iOS edge lane is a product e2e smoke, not the catalog's full cross-repo
+    CI. A runner must opt in explicitly and its catalog ownership must derive to
+    Klik so owlspace_map/self-tests and other cross-repo checks cannot block it.
+    """
+    chaos = bug.get("chaos") or {}
+    if chaos.get("ios_edge") is not True:
+        return False
+    if project_of(bug.get("source_files")) != "klik":
+        return False
+    if bug.get("surface") == "tooling-ci":
+        return False
+    runner = str(chaos.get("runner") or "")
+    return runner.startswith("chaos/") and "\n" not in runner
+
+
+def chaos_runners(ios_edge: bool = False) -> list[tuple[str, str, str]]:
     """Yield (bug_id, runner_path, description) for each catalog entry
-    whose `chaos.runner` is set. Consumed by run_chaos_phase.sh."""
+    whose `chaos.runner` is set. Consumed by run_chaos_phase.sh.
+
+    `ios_edge=True` narrows to explicitly opted-in Klik product checks only;
+    cross-repo/tooling/catalog self-tests stay in their own CI lane.
+    """
     out = []
     base = Path(__file__).resolve().parent
     for bug in load():
@@ -204,8 +226,11 @@ def chaos_runners() -> list[tuple[str, str, str]]:
         runner = chaos.get("runner")
         if not runner:
             continue
+        if ios_edge and not _is_klik_ios_edge_runner(bug):
+            continue
         runner_path = base / runner
-        out.append((bug["id"], str(runner_path), chaos.get("description", "")))
+        desc = " ".join(str(chaos.get("description", "")).split())
+        out.append((bug["id"], str(runner_path), desc))
     return out
 
 

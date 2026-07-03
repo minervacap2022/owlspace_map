@@ -34,7 +34,7 @@ python3 -c "
 import sys
 sys.path.insert(0, '${SCRIPT_DIR}')
 from load_catalog import chaos_runners
-for bug_id, runner, desc in chaos_runners():
+for bug_id, runner, desc in chaos_runners(ios_edge=bool(${IOS_EDGE})):
     print(f'{bug_id}\t{runner}\t{desc}')
 " > "$ENTRIES_FILE" 2>/dev/null
 
@@ -54,9 +54,13 @@ while IFS=$'\t' read -r bug_id runner desc; do
   fi
 
   echo "RUN   ${bug_id}  ${desc}"
-  if BASE_URL="$BASE_URL" IOS_EDGE="$IOS_EDGE" "$runner" --base-url "$BASE_URL"; then
+  BASE_URL="$BASE_URL" IOS_EDGE="$IOS_EDGE" "$runner" --base-url "$BASE_URL"
+  status=$?
+  if [ "$status" -eq 0 ]; then
     echo "PASS  ${bug_id}"
     PASS=$((PASS+1))
+  elif [ "$status" -eq 2 ]; then
+    echo "SKIP  ${bug_id}  runner precondition not met"
   else
     echo "FAIL  ${bug_id}  ${desc}"
     FAIL=$((FAIL+1))
