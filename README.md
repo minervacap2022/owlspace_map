@@ -40,3 +40,5 @@ This repo is the one home; the tool locations are symlinks into it:
 - `~/.claude/skills/no-new-bugs` → `no-new-bugs/`
 - `~/.claude/skills/bug-regression-catalog` → `bug-regression-catalog/`
 - `~/.git-hooks/production-rules-checker` → `production-rules-checker/`
+
+Install or repair a skill link with `scripts/install_skill_symlink.sh <source-skill-dir> <destination-skills-dir>`. Do not copy these skill directories onto an existing installed skill path: on macOS, `cp -R src dest` follows a symlinked directory destination and creates `src/basename(src)` inside this repo.

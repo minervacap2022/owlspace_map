@@ -59,6 +59,8 @@ jobs:
         run: pip install PyYAML
       - name: Lint test (fires on a planted violation, passes clean)
         run: cd scripts && python3 test_check_producer_gates.py
+      - name: Skill installer regression (no nested skill dirs)
+        run: python3 scripts/test_install_skill_symlink.py
       - name: Every producer skill declares a gates block
         run: python3 scripts/check_producer_gates.py
 
