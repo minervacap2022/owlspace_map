@@ -7,6 +7,7 @@ coverage.xml
 *.scip
 !sector_map/tests_data/*.scip
 graphify-out/
+workspace/
 
 # Python build artifacts
 *.egg-info/
