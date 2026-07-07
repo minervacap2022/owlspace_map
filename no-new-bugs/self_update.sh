@@ -19,7 +19,7 @@ def="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/d
 def="${def:-main}"
 
 git -C "$repo" fetch --quiet origin "$def" 2>/dev/null || {
-  echo "skill self-update: fetch failed (offline?) — using local copy"; exit 0; }
+  echo "skill self-update: network unavailable or origin unreachable — using local copy"; exit 0; }
 
 behind="$(git -C "$repo" rev-list --count "HEAD..origin/$def" 2>/dev/null || echo 0)"
 if [ "$behind" = "0" ]; then
@@ -41,6 +41,6 @@ fi
 if git -C "$repo" pull --ff-only --quiet origin "$def" 2>/dev/null; then
   echo "skill self-update: pulled $behind commit(s) from origin/$def — re-read SKILL.md before proceeding."
 else
-  echo "skill self-update: $behind new commit(s) upstream but ff-pull failed (diverged?) — run git pull manually."
+  echo "skill self-update: $behind new commit(s) upstream but ff-pull could not complete (diverged?) — run git pull manually."
 fi
 exit 0
