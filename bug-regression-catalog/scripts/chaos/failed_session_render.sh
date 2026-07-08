@@ -6,6 +6,7 @@ set -uo pipefail
 
 BASE_URL="${BASE_URL:-https://hiklik.ai}"
 JWT="${IOS_E2E_JWT:-}"
+TIMEZONE="${IOS_E2E_TIMEZONE:-Asia/Shanghai}"
 
 if [ -z "$JWT" ]; then
   echo "  SKIP — IOS_E2E_JWT not set (runner needs a logged-in token)."
@@ -13,7 +14,8 @@ if [ -z "$JWT" ]; then
 fi
 
 resp=$(curl -fsS --max-time 10 "${BASE_URL}/api/v1/meetings?limit=50" \
-  -H "Authorization: Bearer $JWT") || {
+  -H "Authorization: Bearer $JWT" \
+  -H "X-Timezone: $TIMEZONE") || {
     echo "  FAIL — /api/v1/meetings returned non-200"; exit 1; }
 
 check=$(printf '%s' "$resp" | python3 -c "
