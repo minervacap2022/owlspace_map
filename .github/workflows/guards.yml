@@ -41,6 +41,8 @@ jobs:
         run: pip install PyYAML
       - name: Loader invariants (no lying guards, every lint routes + classifies, unique ids)
         run: cd bug-regression-catalog && python3 scripts/test_load_catalog.py
+      - name: Failed-session chaos runner contract
+        run: cd bug-regression-catalog && bash scripts/test_failed_session_render.sh
       - name: Chaos — catalog has no lying guards
         run: cd bug-regression-catalog && bash scripts/chaos/catalog_no_lying_guards.sh
 
