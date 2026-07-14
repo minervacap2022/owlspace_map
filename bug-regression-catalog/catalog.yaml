@@ -3184,3 +3184,29 @@ bugs:
       render.
   chaos:
     runner: null
+- id: BUG-2026-07-14-346759
+  title: Organization Owlbot Template opened a duplicate harness-style editor instead of the Owlbot detail UI
+  date: '2026-07-14'
+  surface: frontend
+  source_files:
+  - apps/owlspace/src/renderer/pages/OwlbotsPage.tsx
+  - apps/owlspace/src/renderer/lib/harness/registry.ts
+  - apps/owlspace/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
+  - apps/owlspace/src/renderer/lib/__tests__/organization-harness-pool.test.ts
+  user_visible_symptom: |
+    Selecting the fixed Organization Template row replaced the normal Owlbot
+    detail pane with a separate split-pane harness editor, so the template did
+    not look or behave like the Owlbot whose defaults it represents.
+  observable_signal: |
+    owlbots-template-layout.test.ts requires the template detail pane to render
+    the shared HarnessSection in organization mode and forbids the removed
+    OrganizationTemplateEditor. organization-harness-pool.test.ts proves org
+    items are installed while workspace and local items remain available.
+  lint:
+  - rule: ORGANIZATION_TEMPLATE_USES_SHARED_OWLBOT_DETAIL
+    pattern: 'expect\(source\)\.not\.toContain\("function OrganizationTemplateEditor"\)'
+    presence: required
+    path: apps/owlspace/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
+    message: The Organization Template must reuse the normal Owlbot detail and HarnessSection instead of restoring a duplicate harness editor.
+  chaos:
+    runner: null
