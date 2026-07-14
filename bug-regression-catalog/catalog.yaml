@@ -3184,6 +3184,173 @@ bugs:
       render.
   chaos:
     runner: null
+- id: BUG-2026-07-10-9e2190
+  title: iOS BLE handshake failures leave a zombie CoreBluetooth connection
+  date: '2026-07-10'
+  surface: ios
+  source_files:
+  - app/src/iosMain/kotlin/ai/hiklik/klik/data/klik/KlikBleTransport.ios.kt
+  - app/src/commonMain/kotlin/ai/hiklik/klik/data/klik/KlikDeviceStateRepository.kt
+  - app/src/commonMain/kotlin/ai/hiklik/klik/MainApp.kt
+  user_visible_symptom: |
+    A real Actions 3089C board remains physically connected to iOS while the app
+    reports disconnected after FFE0/characteristic/subscription/FFE3 failure.
+    The board stops advertising, fallback scan cannot find it, diagnostics are
+    absent from normal logs, and fresh-launch backend hydration can race the
+    immediate auto-reconnect check.
+  observable_signal: |
+    Normal client logs must contain the exact BLE protocol failure (for example
+    "Klik service 0xFFE0 not found" or "FFE3 read returned 29 bytes, expected 30"),
+    followed by CoreBluetooth didDisconnectPeripheral. The board must resume
+    advertising and a subsequent scan/reconnect must find it without toggling Bluetooth.
+  lint:
+  - rule: IOS_BLE_FAILURE_CANCELS_PHYSICAL_LINK
+    pattern: failConnection\(peripheral
+    presence: required
+    path: Klik_one/app/src/iosMain/kotlin/ai/hiklik/klik/data/klik/KlikBleTransport.ios.kt
+    message: iOS BLE discovery/subscription/read failures must use failConnection so the flow closes and CoreBluetooth cancels the physical link.
+  chaos:
+    runner: null
+- id: BUG-2026-07-10-4e52e5
+  title: Backend hydration serialized local BLE reconnect and broad app startup
+  date: '2026-07-10'
+  surface: ios
+  source_files:
+  - Klik_one/app/src/commonMain/kotlin/ai/hiklik/klik/MainApp.kt
+  - Klik_one/app/src/commonMain/kotlin/ai/hiklik/klik/data/klik/KlikDeviceStateRepository.kt
+  - Klik_one/app/src/iosMain/kotlin/ai/hiklik/klik/data/klik/KlikBleTransport.ios.kt
+  user_visible_symptom: |
+    A locally paired Klik could not begin reconnecting until the authenticated
+    backend device-registry request finished its retry/timeout budget. Broad app
+    initialization was serialized behind the same request. Delayed terminal
+    callbacks from an older CoreBluetooth attempt could also clear replacement
+    attempt state, leaving the UI offline despite a newer connection in flight.
+  observable_signal: |
+    StartupSequenceTest must prove local reconnect and AppModule.initialize begin
+    while backend hydration is suspended, and fresh-install hydration triggers
+    exactly one follow-up reconnect. IosBleFailureLifecycleTest must prove a
+    retired attempt cannot clear the current attempt.
+  lint:
+  - rule: NO_SERIALIZED_BLE_BACKEND_BOOT
+    pattern: hydrateFromBackend\(\)[\s\S]{0,200}tryAutoReconnect\(\)[\s\S]{0,200}AppModule\.initialize\(\)
+    presence: forbidden
+    path: app/src/commonMain/kotlin/ai/hiklik/klik/MainApp.kt
+    message: Local BLE reconnect and broad initialization must not be serialized behind backend hydration.
+  chaos:
+    runner: null
+- id: BUG-2026-07-11-847925
+  title: Same-SHA CI rerun can preserve stale canonical green before aggregate bootstrap
+  date: '2026-07-11'
+  surface: ci
+  source_files:
+  - Klik_one/.woodpecker/aggregate.yaml
+  - Klik_one/.woodpecker/ci-success-reconcile.sh
+  - Klik_one/.woodpecker/ci-status-aggregate.sh
+  user_visible_symptom: |
+    A rerun of the same commit can fail during package installation, GitHub App
+    token minting, or source acquisition before publishing canonical pending.
+    The previous successful ci-success status remains latest and GitHub can show
+    a false-green required check for a pipeline that never reached its tests.
+  observable_signal: |
+    scripts/test-ios-workflow-topology.sh must prove the first canonical pending
+    write precedes every package, credential, and source bootstrap operation.
+    scripts/test-ci-success-bridge.sh must reject a same-SHA false-before-pending
+    mutation and enforce the installation-token lifecycle budget.
+  lint:
+  - rule: CI_SUCCESS_PREBOOTSTRAP_RESET_REQUIRED
+    pattern: github_status_bootstrap_token
+    presence: required
+    path: .woodpecker/aggregate.yaml
+    message: Canonical ci-success pending must use the independent status-only bootstrap credential before any failure-prone bootstrap work.
+  chaos:
+    runner: null
+- id: BUG-2026-07-11-bf9d27
+  title: macOS Woodpecker runner contract omitted the Darwin scheduling label
+  date: '2026-07-11'
+  surface: ci
+  source_files:
+  - klik_ci/config/launchd/ai.hiklik.woodpecker-agent.plist.template
+  - klik_ci/tests/macos-agent-launchd-contract-test.sh
+  user_visible_symptom: |
+    The runner template can drift away from platform=darwin/arm64 while its
+    contract tests remain green. iOS workflows then remain queued or can be
+    assigned to an incompatible agent even though Gradle isolation checks pass.
+  observable_signal: |
+    tests/macos-agent-launchd-contract-test.sh must fail if
+    WOODPECKER_AGENT_LABELS is not exactly platform=darwin/arm64, alongside the
+    backend, concurrency, Gradle-root, durability, and secret-file assertions.
+  lint:
+  - rule: MACOS_RUNNER_DARWIN_LABEL_REQUIRED
+    pattern: '"WOODPECKER_AGENT_LABELS": "platform=darwin/arm64"'
+    presence: required
+    path: tests/macos-agent-launchd-contract-test.sh
+    message: The executable runner contract must pin the Darwin ARM64 scheduling label.
+  chaos:
+    runner: null
+- id: BUG-2026-07-11-54510c
+  title: Cancelled iOS stream reconnect waits for non-cancellable refresh and revives the socket
+  date: '2026-07-11'
+  surface: ios
+  source_files:
+  - Klik_one/app/src/commonMain/kotlin/ai/hiklik/klik/data/network/HttpClient.kt
+  - Klik_one/app/src/iosMain/kotlin/ai/hiklik/klik/platform/FixedSessionAudioStreamer.ios.kt
+  - Klik_one/app/src/iosTest/kotlin/ai/hiklik/klik/platform/FixedSessionReconnectLifecycleTest.kt
+  user_visible_symptom: |
+    Stopping a fixed-session stream while token refresh is suspended does not
+    stop the reconnect watcher promptly. Cancellation is downgraded to a normal
+    refresh failure and the watcher can create and start a replacement audio
+    client, reviving a stream the user already stopped.
+  observable_signal: |
+    FixedSessionReconnectLifecycleTest uses an expired JWT and a suspended real
+    refresh callback. Cancelling the reconnect job must complete within one
+    second while the shared refresh continues, with zero replacement client
+    creations and zero starts.
+  lint:
+  - rule: IOS_STREAM_REFRESH_HAS_INDEPENDENT_OWNER
+    pattern: 'streamRefreshScope\.async'
+    presence: required
+    path: app/src/commonMain/kotlin/ai/hiklik/klik/data/network/HttpClient.kt
+    message: Stream reconnect cancellation must stop awaiting promptly without cancelling or waiting for the shared HTTP refresh owner.
+  chaos:
+    runner: null
+- id: BUG-2026-07-11-e2463c
+  title: iOS BLE same-peripheral retry could inherit stale callbacks and accept an invalid frame contract
+  date: '2026-07-11'
+  surface: ios
+  source_files:
+  - Klik_one/app/src/iosMain/kotlin/ai/hiklik/klik/data/klik/KlikBleTransport.ios.kt
+  - Klik_one/app/src/commonMain/kotlin/ai/hiklik/klik/data/klik/KlikBleSpec.kt
+  - Klik_one/app/src/commonMain/kotlin/ai/hiklik/klik/data/klik/KlikPacket.kt
+  - Klik_one/app/src/iosTest/kotlin/ai/hiklik/klik/data/klik/IosBleFailureLifecycleTest.kt
+  user_visible_symptom: |
+    After handshake attempt A failed, delayed CoreBluetooth callbacks for the same
+    CBPeripheral could be routed into replacement attempt B. B could be disconnected
+    or left in PAIR, while healthy 244-byte iOS write capacity was mislabeled as a
+    low MTU and DTP notifications with trailing bytes were silently accepted.
+  observable_signal: |
+    IosBleFailureLifecycleTest must prove B cannot start on the same peripheral until
+    A's didDisconnect consumes callback ownership, and didFailToConnect must permit an
+    immediate retry because no physical link exists. KlikPacketTest must reject a
+    valid frame plus trailing bytes, and KlikClientImplTest must accept 191 writable
+    payload bytes while warning at 190.
+  lint:
+  - rule: IOS_BLE_RECONNECT_WAITS_FOR_DISCONNECT
+    pattern: 'retired\.any \{ it\.peripheral == attempt\.peripheral \}'
+    presence: required
+    path: app/src/iosMain/kotlin/ai/hiklik/klik/data/klik/KlikBleTransport.ios.kt
+    message: Same-peripheral BLE replacement must remain deferred while a retired physical attempt still owns callbacks.
+  - rule: DTP_DECODER_REJECTS_TRAILING_BYTES
+    pattern: 'frame\.size > expectedFrameSize'
+    presence: required
+    path: app/src/commonMain/kotlin/ai/hiklik/klik/data/klik/KlikPacket.kt
+    message: One notification is one complete DTP frame; trailing bytes must be rejected.
+  - rule: BLE_COMPLETE_FRAME_CAPACITY_REQUIRED
+    pattern: 'REQUIRED_DTP_FRAME_BYTES: Int = MAX_DTP_PAYLOAD_BYTES \+ HEADER_BYTES \+ CRC_BYTES'
+    presence: required
+    path: app/src/commonMain/kotlin/ai/hiklik/klik/data/klik/KlikBleSpec.kt
+    message: BLE readiness diagnostics must use the canonical 191-byte complete DTP frame capacity.
+  chaos:
+    runner: null
 - id: BUG-2026-07-14-346759
   title: Organization Owlbot Template opened a duplicate harness-style editor instead of the Owlbot detail UI
   date: '2026-07-14'
