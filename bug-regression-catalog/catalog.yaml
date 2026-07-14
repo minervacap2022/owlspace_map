@@ -3377,3 +3377,37 @@ bugs:
     message: The Organization Template must reuse the normal Owlbot detail and HarnessSection instead of restoring a duplicate harness editor.
   chaos:
     runner: null
+- id: BUG-2026-07-14-4e8aa3
+  title: Organization Owlbot Template omitted all four Markdown documents after the shared-detail refactor
+  date: '2026-07-14'
+  surface: frontend-backend
+  source_files:
+  - apps/owlspace/src/renderer/pages/OwlbotsPage.tsx
+  - apps/owlspace/src/renderer/lib/owlbots.ts
+  - src/routes/organization-template-docs.ts
+  - src/routes/cloud.ts
+  user_visible_symptom: |
+    The Organization Template looked like an Owlbot but showed only Metadata
+    and Harness. SOUL.md, AGENTS.md, TOOLS.md, and MEMORY.md were all missing,
+    so the organization could not edit the documents that new Owlbots should
+    receive. A proposed runtime fallback would also have made ownership hidden
+    and ambiguous instead of creating real per-Owlbot files.
+  observable_signal: |
+    owlbots-template-layout.test.ts requires one shared WorkspaceDocsSection
+    to render in organization, local, and cloud modes. owlbots.test.ts proves
+    local creation copies only non-empty template documents before Harness
+    sync. organization-template-docs.test.ts proves cloud promotion creates
+    concrete missing files once and never falls back over an existing file.
+  lint:
+  - rule: ORGANIZATION_TEMPLATE_SHOWS_FOUR_SHARED_DOCS
+    pattern: 'expect\(source\)\.toMatch\(/<WorkspaceDocsSection\\s\+mode="organization"/'
+    presence: required
+    path: apps/owlspace/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
+    message: The Organization Template must render the same shared four-document editor used by normal Owlbots.
+  - rule: ORGANIZATION_TEMPLATE_DOCS_HAVE_NO_RUNTIME_FALLBACK
+    pattern: 'mergeOrganizationTemplateDocs|readEffectiveDocs'
+    presence: forbidden
+    path: src/routes/cloud.ts
+    message: Organization template docs must be copied into real per-Owlbot files during creation or promotion, never resolved through runtime fallback.
+  chaos:
+    runner: null
