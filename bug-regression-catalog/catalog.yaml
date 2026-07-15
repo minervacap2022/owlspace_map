@@ -519,7 +519,7 @@ bugs:
   date: 2026-05-29
   surface: owlspace-build
   source_files:
-  - /Users/wilsonxu/Owlspace_re/apps/owlspace/package.json
+  - /Users/wilsonxu/Owlspace_re/apps/owlspace-re/package.json
   user_visible_symptom: 'Removed UI (e.g. the Performance toggles) still appeared in grep of the
 
     packaged app and bloated the OTA zip, because `vite build` left 13+
@@ -776,7 +776,7 @@ bugs:
   surface: owlspace-org-directory
   source_files:
   - /Users/wilsonxu/owl-backend/src/routes/me.ts
-  - /Users/wilsonxu/Owlspace_re/apps/owlspace/src/renderer/pages/channels/ChannelFeed.tsx
+  - /Users/wilsonxu/Owlspace_re/apps/owlspace-re/src/renderer/pages/channels/ChannelFeed.tsx
   - /Users/wilsonxu/Owlspace_re/packages/owl-agent-server/src/runtime/runtime.ts
   user_visible_symptom: 'On a machine that doesn''t OWN a given owlbot, that bot''s messages
 
@@ -853,7 +853,7 @@ bugs:
   date: 2026-05-30
   surface: owlspace-settings
   source_files:
-  - /Users/wilsonxu/Owlspace_re/apps/owlspace/src/renderer/pages/settings/AppearanceSettingsPage.tsx
+  - /Users/wilsonxu/Owlspace_re/apps/owlspace-re/src/renderer/pages/settings/AppearanceSettingsPage.tsx
   user_visible_symptom: 'The Appearance settings "Connection Icons" toggle flipped on/off and
 
     persisted craft-show-connection-icons to localStorage, but nothing ever
@@ -2401,7 +2401,7 @@ bugs:
   surface: backend
   source_files:
   - owl-backend/src/routes/channels.ts
-  - owl-agent/apps/owlspace/src/renderer/pages/channels/MembersPanel.tsx
+  - owl-agent/apps/owlspace-re/src/renderer/pages/channels/MembersPanel.tsx
   user_visible_symptom: 'In a shared channel, a member that was another co-member''s PRIVATE owlbot
 
     (e.g. Mint in a reach: channel) rendered as a short uuid like "c3811e18…"
@@ -2533,8 +2533,8 @@ bugs:
   surface: backend
   source_files:
   - owl-backend/src/routes/channels.ts
-  - owl-agent/apps/owlspace/src/renderer/components/app-shell/AppShell.tsx
-  - owl-agent/apps/owlspace/src/renderer/components/app-shell/SidebarMenu.tsx
+  - owl-agent/apps/owlspace-re/src/renderer/components/app-shell/AppShell.tsx
+  - owl-agent/apps/owlspace-re/src/renderer/components/app-shell/SidebarMenu.tsx
   user_visible_symptom: 'Users could create channels (any member) but could not delete them — DELETE
 
     /v1/channels/:id was requireAdmin, so a non-admin who created a channel got
@@ -2576,7 +2576,7 @@ bugs:
   date: 2026-06-02
   surface: frontend
   source_files:
-  - owl-agent/apps/owlspace/src/renderer/pages/OwlbotsPage.tsx
+  - owl-agent/apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
   - owl-agent/packages/owl-agent-server/src/http/routes/agents.ts
   user_visible_symptom: 'The Owlbots editor''s "Cwd strategy" select offered "fixed", but there was NO
 
@@ -2620,8 +2620,8 @@ bugs:
   date: 2026-06-02
   surface: frontend
   source_files:
-  - owl-agent/apps/owlspace/src/renderer/pages/channels/AddOwlbotPicker.tsx
-  - owl-agent/apps/owlspace/src/renderer/lib/owl-backend.ts
+  - owl-agent/apps/owlspace-re/src/renderer/pages/channels/AddOwlbotPicker.tsx
+  - owl-agent/apps/owlspace-re/src/renderer/lib/owl-backend.ts
   user_visible_symptom: 'A user created a channel, invited owlbots (e.g. Sage, Default), typed plain
 
     messages, and got ZERO replies. The bots WERE connected and saw the messages
@@ -2645,7 +2645,7 @@ bugs:
     rule: ADDOWLBOT_INVITES_ALWAYS_ON
     presence: required
     pattern: addOwlbot.channel.id, backendUuid, true.
-    path: apps/owlspace/src/renderer/pages/channels/AddOwlbotPicker.tsx
+    path: apps/owlspace-re/src/renderer/pages/channels/AddOwlbotPicker.tsx
     description: AddOwlbotPicker must invite owlbots with always_on=true so they reply to every message,
       not only @-mentions. Match count must be >= 1.
   chaos:
@@ -3073,7 +3073,7 @@ bugs:
   date: 2026-06-04
   surface: client
   source_files:
-  - apps/owlspace/src/transport/routed-client.ts
+  - apps/owlspace-re/src/transport/routed-client.ts
   user_visible_symptom: 'Test failure (ReferenceError: Cannot access ''unsub'' before initialization).
     Latent in prod — the real WsRpcClient often fires the callback asynchronously (state=''connecting''),
     but when already ''connected'' the callback fires synchronously and unsub is in its temporal dead
@@ -3083,11 +3083,11 @@ bugs:
     pattern: const unsub\s*=\s*\w+\.onConnectionStateChanged
     presence: forbidden
     globs:
-    - apps/owlspace/src/transport/*.ts
+    - apps/owlspace-re/src/transport/*.ts
     message: '`const unsub` referenced inside its own initializer''s synchronous callback — use `let`
       + a done-guard + sync-fire fallback. Fixed in cloud-ssh-workdirs d5f3a716.'
   observable_signal: |
-    grep -rE 'const unsub\s*=\s*\w+\.onConnectionStateChanged' apps/owlspace/src/transport/
+    grep -rE 'const unsub\s*=\s*\w+\.onConnectionStateChanged' apps/owlspace-re/src/transport/
     → any hit = the TDZ pattern was reintroduced (must be `let` + done-guard).
     The RoutedClient workspace-swap unit test exercises the synchronous-fire path
     (state already 'connected'); a ReferenceError there = regression.
@@ -3356,10 +3356,10 @@ bugs:
   date: '2026-07-14'
   surface: frontend
   source_files:
-  - apps/owlspace/src/renderer/pages/OwlbotsPage.tsx
-  - apps/owlspace/src/renderer/lib/harness/registry.ts
-  - apps/owlspace/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
-  - apps/owlspace/src/renderer/lib/__tests__/organization-harness-pool.test.ts
+  - apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+  - apps/owlspace-re/src/renderer/lib/harness/registry.ts
+  - apps/owlspace-re/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
+  - apps/owlspace-re/src/renderer/lib/__tests__/organization-harness-pool.test.ts
   user_visible_symptom: |
     Selecting the fixed Organization Template row replaced the normal Owlbot
     detail pane with a separate split-pane harness editor, so the template did
@@ -3373,7 +3373,7 @@ bugs:
   - rule: ORGANIZATION_TEMPLATE_USES_SHARED_OWLBOT_DETAIL
     pattern: 'expect\(source\)\.not\.toContain\("function OrganizationTemplateEditor"\)'
     presence: required
-    path: apps/owlspace/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
+    path: apps/owlspace-re/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
     message: The Organization Template must reuse the normal Owlbot detail and HarnessSection instead of restoring a duplicate harness editor.
   chaos:
     runner: null
@@ -3382,8 +3382,8 @@ bugs:
   date: '2026-07-14'
   surface: frontend-backend
   source_files:
-  - apps/owlspace/src/renderer/pages/OwlbotsPage.tsx
-  - apps/owlspace/src/renderer/lib/owlbots.ts
+  - apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+  - apps/owlspace-re/src/renderer/lib/owlbots.ts
   - src/routes/organization-template-docs.ts
   - src/routes/cloud.ts
   user_visible_symptom: |
@@ -3402,7 +3402,7 @@ bugs:
   - rule: ORGANIZATION_TEMPLATE_SHOWS_FOUR_SHARED_DOCS
     pattern: 'expect\(source\)\.toMatch\(/<WorkspaceDocsSection\\s\+mode="organization"/'
     presence: required
-    path: apps/owlspace/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
+    path: apps/owlspace-re/src/renderer/pages/__tests__/owlbots-template-layout.test.ts
     message: The Organization Template must render the same shared four-document editor used by normal Owlbots.
   - rule: ORGANIZATION_TEMPLATE_DOCS_HAVE_NO_RUNTIME_FALLBACK
     pattern: 'mergeOrganizationTemplateDocs|readEffectiveDocs'
@@ -3435,5 +3435,31 @@ bugs:
     presence: required
     path: src/__tests__/organization-template-docs.test.ts
     message: The backend must retain an executable regression test proving all four persisted organization template defaults are non-empty.
+  chaos:
+    runner: null
+- id: BUG-2026-07-15-eaf360
+  title: Desktop workspace retained the legacy unsuffixed source path
+  date: '2026-07-15'
+  surface: frontend
+  source_files:
+  - apps/owlspace-re/src/__tests__/workspace-path-invariant.test.ts
+  - scripts/repo-guards.sh
+  - .woodpecker/ci.yaml
+  user_visible_symptom: |
+    The installed product and release artifacts were branded OWLSpace-Re, but
+    the committed Electron workspace still lived under an unsuffixed directory
+    inside a deeply nested legacy clone. Build scripts, documentation, CI, and
+    generated caches could therefore continue drifting between two names.
+  observable_signal: |
+    pnpm guards and workspace-path-invariant.test.ts require apps/owlspace-re to
+    exist, reject the legacy directory and tracked stale path references, and reject
+    tracked .turbo cache artifacts. Woodpecker runs both checks before posting
+    ci-success.
+  lint:
+  - rule: OWLSPACE_DESKTOP_WORKSPACE_IS_CANONICAL
+    pattern: 'uses only the canonical apps/owlspace-re workspace name'
+    presence: required
+    path: apps/owlspace-re/src/__tests__/workspace-path-invariant.test.ts
+    message: The frontend must keep one canonical apps/owlspace-re desktop workspace with a committed regression test.
   chaos:
     runner: null
