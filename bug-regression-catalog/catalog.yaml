@@ -3463,3 +3463,27 @@ bugs:
     message: The frontend must keep one canonical apps/owlspace-re desktop workspace with a committed regression test.
   chaos:
     runner: null
+- id: BUG-2026-07-15-91c70e
+  title: Committed workspace guard matched its own forbidden legacy path
+  date: '2026-07-15'
+  surface: frontend
+  source_files:
+  - scripts/repo-guards.sh
+  - apps/owlspace-re/src/__tests__/workspace-path-invariant.test.ts
+  user_visible_symptom: |
+    The workspace invariant passed locally while the new guard script was still
+    untracked, then failed in the first clean Woodpecker checkout after the guard
+    became tracked. The guard contained the exact legacy path that the repository-
+    wide test correctly forbids, so CI failed despite all application code passing.
+  observable_signal: |
+    The GitHub pull-request merge ref must pass both the workspace path invariant
+    test and scripts/repo-guards.sh after the guard itself is committed. The guard
+    constructs the legacy path dynamically and contains no literal forbidden match.
+  lint:
+  - rule: WORKSPACE_GUARD_DOES_NOT_MATCH_ITSELF
+    pattern: 'test ! -e "\$stale_workspace"'
+    presence: required
+    path: scripts/repo-guards.sh
+    message: The canonical workspace guard must reuse its dynamically constructed legacy path so the committed guard cannot violate its own repository-wide invariant.
+  chaos:
+    runner: null
