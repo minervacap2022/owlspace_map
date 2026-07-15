@@ -3411,3 +3411,29 @@ bugs:
     message: Organization template docs must be copied into real per-Owlbot files during creation or promotion, never resolved through runtime fallback.
   chaos:
     runner: null
+- id: BUG-2026-07-15-c8e70d
+  title: Organization template rendered four empty documents because persisted defaults were never initialized
+  date: '2026-07-15'
+  surface: backend
+  source_files:
+  - owl-backend/migrations/0020_seed_organization_template_docs.sql
+  - owl-backend/src/organization-template-doc-contract.ts
+  - owl-backend/src/routes/companies.ts
+  - owl-backend/src/__tests__/organization-template-docs.test.ts
+  user_visible_symptom: |
+    The Organization Template correctly displayed SOUL.md, AGENTS.md, TOOLS.md,
+    and MEMORY.md, but every editor was empty. The backend had created the
+    storage table without inserting the canonical Default Owlbot templates for
+    existing organizations or newly created companies.
+  observable_signal: |
+    organization-template-docs.test.ts requires all four canonical persisted
+    defaults to exist and contain non-whitespace content. In production,
+    organization_template_docs must contain four non-empty rows per company.
+  lint:
+  - rule: ORGANIZATION_TEMPLATE_DEFAULT_DOCS_ARE_NONEMPTY
+    pattern: 'ships a concrete non-empty default for every canonical document'
+    presence: required
+    path: src/__tests__/organization-template-docs.test.ts
+    message: The backend must retain an executable regression test proving all four persisted organization template defaults are non-empty.
+  chaos:
+    runner: null
