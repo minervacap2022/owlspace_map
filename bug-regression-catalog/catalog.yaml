@@ -3537,3 +3537,43 @@ bugs:
     message: MapServerManager must reject a deleted working directory before Python initialization or server spawning.
   chaos:
     runner: null
+- id: BUG-2026-07-15-25e77c
+  title: Harness pools and types drifted across duplicate UI presentation paths
+  date: '2026-07-15'
+  surface: frontend
+  source_files:
+  - apps/owlspace-re/src/renderer/lib/harness/presentation.ts
+  - apps/owlspace-re/src/renderer/components/harness/HarnessItemDisplay.tsx
+  - apps/owlspace-re/src/renderer/pages/HarnessPage.tsx
+  - apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+  - apps/owlspace-re/src/renderer/lib/harness/registry.ts
+  user_visible_symptom: |
+    Skills, hooks, commands, and extensions used different row, badge, metadata,
+    and detail formats depending on whether the item came from Installed,
+    Workspace, Org pool, Local, Internet, or an Owlbot detail panel. Installed
+    state also overwrote the real source, and uninstall optimistically guessed
+    Local, so the UI could display false provenance until the next refresh.
+  observable_signal: |
+    HarnessItemDisplay.test.tsx renders every harness type/source combination
+    through the shared row and details components. harness-presentation.test.ts
+    verifies one source vocabulary and hook normalization, while
+    organization-harness-pool.test.ts verifies install state never replaces the
+    real source and unsupported Internet tabs are not advertised.
+  lint:
+  - rule: HARNESS_UI_USES_CANONICAL_SHARED_RENDERER
+    pattern: 'HarnessItemDisplay'
+    presence: required
+    path: apps/owlspace-re/src/renderer/pages/HarnessPage.tsx
+    message: The Harness browser must render items through the canonical shared HarnessItemDisplay component.
+  - rule: OWLBOT_HARNESS_UI_USES_CANONICAL_SHARED_RENDERER
+    pattern: 'HarnessItemDisplay'
+    presence: required
+    path: apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+    message: Owlbot Harness panels must use the same canonical HarnessItemDisplay component as the Harness browser.
+  - rule: HARNESS_SOURCE_HAS_NO_OPTIMISTIC_FALLBACK_GUESS
+    pattern: 'sourceWithoutInstalled'
+    presence: forbidden
+    path: apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+    message: Install state must remain separate from source; never guess a fallback source during optimistic updates.
+  chaos:
+    runner: null
