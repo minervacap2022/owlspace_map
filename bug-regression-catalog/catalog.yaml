@@ -3487,3 +3487,53 @@ bugs:
     message: The canonical workspace guard must reuse its dynamically constructed legacy path so the committed guard cannot violate its own repository-wide invariant.
   chaos:
     runner: null
+- id: BUG-2026-07-15-d9e402
+  title: macOS packaging hook copied Assets.car into the obsolete upstream app bundle
+  date: '2026-07-15'
+  surface: frontend
+  source_files:
+  - apps/owlspace-re/scripts/afterPack.cjs
+  - apps/owlspace-re/src/__tests__/after-pack-assets.test.ts
+  - .woodpecker/ci.yaml
+  user_visible_symptom: |
+    The arm64 build completed and installed successfully, but the signed
+    OWLSpace-Re.app omitted Assets.car because afterPack still targeted the old
+    Craft Agents.app bundle. macOS therefore used only the fallback icon instead
+    of the packaged Liquid Glass asset catalog.
+  observable_signal: |
+    The packaging log must contain "Liquid Glass icon copied" with an
+    OWLSpace-Re.app destination. after-pack-assets.test.ts drives the real hook
+    with the configured product filename, and the packaged and installed
+    Assets.car files must byte-match the committed source.
+  lint:
+  - rule: MACOS_ASSET_CATALOG_USES_CONFIGURED_PRODUCT_NAME
+    pattern: 'context\.packager\.appInfo\.productFilename'
+    presence: required
+    path: apps/owlspace-re/scripts/afterPack.cjs
+    message: The macOS afterPack hook must derive the app bundle from electron-builder's configured product filename, never an upstream hardcoded name.
+  chaos:
+    runner: null
+- id: BUG-2026-07-15-d692e5
+  title: Deleted session workspaces spawned permanent fallback Map servers
+  date: '2026-07-15'
+  surface: frontend
+  source_files:
+  - packages/craft-server-core/src/services/map-server-manager.ts
+  - packages/craft-server-core/src/services/__tests__/map-server-manager.test.ts
+  user_visible_symptom: |
+    Launching OWLSpace-Re recreated sector-map Python processes for deleted local,
+    cloud, and worktree directories, including the removed pre-relocation clone.
+    Each failed initialization then started a default-profile fallback process,
+    producing repeated startup errors and keeping dead sessions active forever.
+  observable_signal: |
+    map-server-manager.test.ts requires a deleted cwd to reject with init-failed
+    while status remains stopped. After relaunch, no sector_map server process or
+    map-servers.json entry may reference a path that does not exist.
+  lint:
+  - rule: MAP_MANAGER_REJECTS_MISSING_WORKSPACE_BEFORE_SPAWN
+    pattern: 'working directory does not exist:'
+    presence: required
+    path: packages/craft-server-core/src/services/map-server-manager.ts
+    message: MapServerManager must reject a deleted working directory before Python initialization or server spawning.
+  chaos:
+    runner: null
