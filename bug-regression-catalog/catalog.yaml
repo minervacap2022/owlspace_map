@@ -3704,3 +3704,37 @@ bugs:
     message: Local runtimes must subscribe to organization connection changes instead of refreshing only when the AI screen is opened.
   chaos:
     runner: null
+- id: BUG-2026-07-16-f77ee6
+  title: Session model selection was overridden by stale Codex resume state and provider environment
+  date: '2026-07-16'
+  surface: frontend
+  source_files:
+  - Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
+  - Owl/Sources/App/macOS/Owl/Stores/ProviderStore.swift
+  - Owl/Sources/App/macOS/Owl/Stores/SessionStore.swift
+  - Owl/Tests/OwldHelpersTests.swift
+  - Owl/Tests/ProviderStoreTests.swift
+  - Owl/Tests/SessionStoreTests.swift
+  user_visible_symptom: |
+    Selecting the Wilson provider for a session advertised claude-failover, but
+    Codex could resume with mujica_naiba_wilson or gpt-5.6-sol high from saved
+    rollout state. Claude Code could also retain ANTHROPIC_MODEL after switching
+    providers, while session overrides containing an old gateway URL were lost.
+  observable_signal: |
+    OwldHelpersTests requires both fresh and resumed Codex launches to pass the
+    selected model and canonical effort explicitly. ProviderStoreTests requires
+    official mode to unset ANTHROPIC_MODEL, and SessionStoreTests requires a
+    legacy Wilson provider id to migrate to the current endpoint and env body.
+  lint:
+  - rule: CODEX_SESSION_LAUNCH_BINDS_SELECTED_MODEL
+    pattern: '--model \\"\$\{ANTHROPIC_MODEL:-gpt-5\.5\}\\"'
+    presence: required
+    path: Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
+    message: Fresh and resumed Codex launches must explicitly bind the provider-selected model so persisted rollout state cannot override the session picker.
+  - rule: OFFICIAL_PROVIDER_CLEARS_STALE_MODEL_ALIAS
+    pattern: 'unset ANTHROPIC_MODEL'
+    presence: required
+    path: Owl/Sources/App/macOS/Owl/Stores/ProviderStore.swift
+    message: Official provider mode must clear the prior built-in model alias before launching Claude Code.
+  chaos:
+    runner: null
