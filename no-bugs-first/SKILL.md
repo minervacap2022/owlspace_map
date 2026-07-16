@@ -100,6 +100,12 @@ When this skill finishes, the repo has ALL of these, or it isn't done:
    `nexora-policy/policy/10-prd-hygiene.md`, the *KLIK instance* of the gate is
    `Scripts/check_prd_hygiene.sh` in `ci-success`.
 7. **A `HOW-IT-WORKS.md`** (or README section) explaining the structure so it is legible.
+8. **An owner Simulation Contract seam for every applicable service** — when a new or
+   refactored service owns user-visible prompts, tunable behavior, selected-user state,
+   artifacts, or real side effects, it ships owner discovery/execution contracts, RED-first
+   contract tests, documentation, and project-gate wiring before production admission. The
+   canonical rule is `nexora-policy/policy/13-simulation-contracts.md`; do not copy owner
+   prompts/defaults into a consumer or claim coverage without owner-validated evidence.
 
 Each output is a check or an artifact — none is "we'll remember to." That is the whole point.
 
@@ -150,6 +156,13 @@ Pick the layout from the detected stack — see `references/layouts.md` for the 
   contract, never two copies (duplication-drift is the enemy).
 The directory invariant ("inner layer never imports outer") becomes a `repo-guards.sh` check —
 a layered architecture is *grep-enforceable*, which is why it's the structure we pick.
+
+For an applicable Owner Simulation Contract, the same ownership boundary applies: production
+owners expose typed discovery/execution seams and tests; consumers depend on that contract and
+never import owner runtime code, read owner databases, or maintain prompt/default copies. Route
+the objective rejection through the project's hard-rules gate. KLIK's instance is
+`SIMULATION_CONTRACT_REQUIRED`; its canonical policy remains
+`nexora-policy/policy/13-simulation-contracts.md`.
 
 ### Step 4 — Lay the enforcement spine
 - Copy `~/.claude/lib/guards/repo-guards.sh` into `scripts/`, add project checks (layer-import
