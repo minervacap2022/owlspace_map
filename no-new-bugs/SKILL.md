@@ -204,6 +204,13 @@ shared one (that is how duplication-drift starts).
   mention, don't delete (ASK first).
 - Prefer the minimum: 200 lines that should be 50 → rewrite. No speculative
   flexibility/config/error-handling for impossible scenarios.
+- **Prompt/parameter changes stay owner-defined.** If a production capability is governed by an
+  Owner Simulation Contract, change the owner's typed contract as the single source of truth and
+  add a RED-first owner contract test proving the baseline and request-scoped modification. Never
+  copy prompts/defaults into a consumer, access the owner database directly, or fake registered
+  coverage. Verify the real target uses the owner contract and latest state. Canonical policy:
+  `nexora-policy/policy/13-simulation-contracts.md`; KLIK rejects drift through
+  `SIMULATION_CONTRACT_REQUIRED`.
 - **Shrink the blast radius — decompose the God-file.** An oversized unit *is* a bug
   factory: a 3,785-LOC god-file touched 61× bred regressions because every change reached
   too far. When the partition you must touch is too big to reason about, split it along the
