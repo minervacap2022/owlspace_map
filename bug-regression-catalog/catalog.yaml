@@ -3577,3 +3577,38 @@ bugs:
     message: Install state must remain separate from source; never guess a fallback source during optimistic updates.
   chaos:
     runner: null
+- id: BUG-2026-07-16-6080a4
+  title: Cloud Owlbot configuration drifted from local Owlbot behavior
+  date: '2026-07-16'
+  surface: frontend
+  source_files:
+  - apps/owlspace-re/src/renderer/components/owlbots/OwlbotMetadata.tsx
+  - apps/owlspace-re/src/renderer/lib/owlbot-config.ts
+  - apps/owlspace-re/src/renderer/lib/cloud-owl-status.ts
+  - apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+  - packages/owl-agent-server/src/cloud-host.ts
+  - src/routes/agents.ts
+  - src/routes/cloud.ts
+  user_visible_symptom: |
+    Cloud Owlbots used a separate metadata renderer and persistence path, so they
+    lacked low-model and thinking controls, ignored permission/tool/cwd settings
+    at runtime, exposed raw heartbeat timestamps, and could remain falsely green.
+    Non-owners also received mutation controls for organization-owned Owlbots.
+  observable_signal: |
+    owlbot-config-parity.test.ts requires one shared metadata renderer and no raw
+    telemetry labels. owlbot-config.test.ts verifies local/cloud adapter parity,
+    cloud-owl-status.test.ts verifies heartbeat expiry, and the backend/runtime
+    contract tests require every shared field to survive API and sidecar writes.
+  lint:
+  - rule: OWLBOT_METADATA_USES_ONE_CANONICAL_RENDERER
+    pattern: 'OwlbotMetadataEditor'
+    presence: required
+    path: apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+    message: Local and cloud Owlbots must use the shared typed metadata editor rather than independent configuration paths.
+  - rule: OWLBOT_METADATA_HAS_NO_DUPLICATE_CLOUD_RENDERER
+    pattern: 'function (MetaView|MetaEditor|CloudMetaView|CloudMetaEditor)\('
+    presence: forbidden
+    path: apps/owlspace-re/src/renderer/pages/OwlbotsPage.tsx
+    message: Do not reintroduce separate local/cloud metadata renderers; duplication caused configuration and telemetry drift.
+  chaos:
+    runner: null
