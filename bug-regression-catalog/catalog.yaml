@@ -363,53 +363,6 @@ bugs:
     - .test.ts
   chaos:
     runner: null
-- id: BUG-2026-07-16-7285a6
-  title: Independent Owlbot discovery leaked local agents and duplicate identities
-  date: '2026-07-16'
-  surface: frontend
-  source_files:
-  - Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
-  - Owl/Tests/OwldHelpersTests.swift
-  user_visible_symptom: |
-    The Independent section showed local Owlbots such as Harry, Cory, and Dana,
-    and could show Alex twice. Remote discovery compared normalized Feishu names
-    against case-preserving local names and did not deduplicate equivalent rows.
-  observable_signal: |
-    OwldHelpersTests.test_remoteIndependentAgents_excludes_local_names_and_deduplicates_normalized_identity
-    must pass. It covers case- and punctuation-insensitive local exclusion,
-    canonical AgentRecord.isIndependentAgent classification, and stable deduplication.
-  lint:
-  - rule: REMOTE_INDEPENDENT_DISCOVERY_USES_CANONICAL_SELECTOR
-    pattern: 'OwldHelpers\.remoteIndependentAgents\(all: all, local: local\)'
-    presence: required
-    path: Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
-    message: Remote discovery must use the tested canonical selector so local-name filtering and deduplication cannot drift from the Independent section contract.
-  chaos:
-    runner: null
-- id: BUG-2026-07-16-db448e
-  title: OTA release upload timed out before large bundled-runtime DMGs completed
-  date: '2026-07-16'
-  surface: release
-  source_files:
-  - scripts/make-appcast.sh
-  user_visible_symptom: |
-    Publishing OWLSpace 0.1.77 repeatedly restarted or failed because the
-    398,935,547-byte signed DMG could not finish uploading within the release
-    script's hardcoded 1,800-second curl timeout. The GitHub release existed,
-    but OTA remained unavailable because its asset and appcast were incomplete.
-  observable_signal: |
-    scripts/make-appcast.sh must permit at least two hours for a release-asset
-    upload by default while retaining an environment override. The publisher
-    must then verify one uploaded asset with the signed length and confirm the
-    public appcast advertises the same version and build.
-  lint:
-  - rule: OWLSPACE_OTA_UPLOAD_SUPPORTS_LARGE_DMGS
-    pattern: 'OWL_UPLOAD_MAX_TIME:-7200'
-    presence: required
-    path: scripts/make-appcast.sh
-    message: OWLSpace OTA publishing must retain a configurable two-hour default upload window for large bundled-runtime DMGs.
-  chaos:
-    runner: null
     description: Covered by owl-agent-server unit tests + a live cloud-host inject (Bob posts @Forming,
       assert Forming's WS logs decision=true and posts exactly one reply, then goes quiet).
   observable_signal: 'Cloud-host journal (ssh owlspace → journalctl -u owl-agent-server):
@@ -470,6 +423,53 @@ bugs:
     marker, the sink stopped finalizing on error/session_complete.
 
     '
+- id: BUG-2026-07-16-db448e
+  title: OTA release upload timed out before large bundled-runtime DMGs completed
+  date: '2026-07-16'
+  surface: release
+  source_files:
+  - /Users/wilsonxu/Owlspace_re/scripts/make-appcast.sh
+  user_visible_symptom: |
+    Publishing OWLSpace 0.1.77 repeatedly restarted or failed because the
+    398,935,547-byte signed DMG could not finish uploading within the release
+    script's hardcoded 1,800-second curl timeout. The GitHub release existed,
+    but OTA remained unavailable because its asset and appcast were incomplete.
+  observable_signal: |
+    scripts/make-appcast.sh must permit at least two hours for a release-asset
+    upload by default while retaining an environment override. The publisher
+    must then verify one uploaded asset with the signed length and confirm the
+    public appcast advertises the same version and build.
+  lint:
+  - rule: OWLSPACE_OTA_UPLOAD_SUPPORTS_LARGE_DMGS
+    pattern: 'OWL_UPLOAD_MAX_TIME:-7200'
+    presence: required
+    path: scripts/make-appcast.sh
+    message: OWLSpace OTA publishing must retain a configurable two-hour default upload window for large bundled-runtime DMGs.
+  chaos:
+    runner: null
+- id: BUG-2026-07-16-7285a6
+  title: Independent Owlbot discovery leaked local agents and duplicate identities
+  date: '2026-07-16'
+  surface: frontend
+  source_files:
+  - Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
+  - Owl/Tests/OwldHelpersTests.swift
+  user_visible_symptom: |
+    The Independent section showed local Owlbots such as Harry, Cory, and Dana,
+    and could show Alex twice. Remote discovery compared normalized Feishu names
+    against case-preserving local names and did not deduplicate equivalent rows.
+  observable_signal: |
+    OwldHelpersTests.test_remoteIndependentAgents_excludes_local_names_and_deduplicates_normalized_identity
+    must pass. It covers case- and punctuation-insensitive local exclusion,
+    canonical AgentRecord.isIndependentAgent classification, and stable deduplication.
+  lint:
+  - rule: REMOTE_INDEPENDENT_DISCOVERY_USES_CANONICAL_SELECTOR
+    pattern: 'OwldHelpers\.remoteIndependentAgents\(all: all, local: local\)'
+    presence: required
+    path: Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
+    message: Remote discovery must use the tested canonical selector so local-name filtering and deduplication cannot drift from the Independent section contract.
+  chaos:
+    runner: null
 - id: BUG-2026-05-29-C
   title: Empty knownBotIds → always-on owlbots ping-pong forever (loop guard never engages)
   date: 2026-05-29
