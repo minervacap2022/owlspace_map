@@ -3612,3 +3612,48 @@ bugs:
     message: Do not reintroduce separate local/cloud metadata renderers; duplication caused configuration and telemetry drift.
   chaos:
     runner: null
+- id: BUG-2026-07-16-161cb7
+  title: Organization configuration published successfully but runtimes kept stale local or host-global state
+  date: '2026-07-16'
+  surface: frontend
+  source_files:
+  - packages/owl-agent-server/src/backend-sync.ts
+  - packages/owl-agent-server/src/cloud-host.ts
+  - packages/owl-agent-server/src/storage/providers.ts
+  - apps/owlspace-re/src/renderer/lib/harness/registry.ts
+  - src/routes/cloud.ts
+  - src/routes/events.ts
+  - src/routes/org-llm-connections.ts
+  user_visible_symptom: |
+    Organization connections, rules, harness items, defaults, and Owlbot edits
+    could show the new value on the publishing machine while another desktop or
+    cloud Owlbot continued using cached state. Cloud Owlbots silently resolved
+    unknown organization provider ids through the host-global 8318 gateway,
+    and organization event fanout was not company-scoped.
+  observable_signal: |
+    ProviderRegistry tests must reject unknown qualified providers and prove an
+    organization provider replaces a same-slug local value. cloud-host tests
+    must resolve bare models through per-agent scoped organization providers.
+    backend-sync-organization-events, organization-rules-live-reload,
+    organization-harness-pool, cloud-host-organization-connections, and
+    events-company-scope tests must all pass. In production, the backend org
+    connection URL, local effective provider URL, and cloud-host scoped provider
+    URL must agree after publish or unpublish.
+  lint:
+  - rule: QUALIFIED_PROVIDER_NEVER_FALLS_BACK_TO_DEFAULT
+    pattern: 'falling back to default'
+    presence: forbidden
+    path: packages/owl-agent-server/src/storage/providers.ts
+    message: An explicitly qualified provider id must fail closed when missing; silently using the host or local default can send traffic to stale organization infrastructure.
+  - rule: CLOUD_HOST_MATERIALIZES_SCOPED_ORG_PROVIDERS
+    pattern: 'runtime\.providers\.replaceOrgProviders\(scopedOrganizationProviders\(bots\)\)'
+    presence: required
+    path: packages/owl-agent-server/src/cloud-host.ts
+    message: Every cloud reconcile must replace the effective provider layer from company-scoped organization connections before writing Owlbot sidecars.
+  - rule: BACKEND_SUBSCRIBES_ORGANIZATION_CONNECTION_EVENTS
+    pattern: '"org-llm-connections"'
+    presence: required
+    path: packages/owl-agent-server/src/backend-sync.ts
+    message: Local runtimes must subscribe to organization connection changes instead of refreshing only when the AI screen is opened.
+  chaos:
+    runner: null
