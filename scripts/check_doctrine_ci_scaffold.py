@@ -26,6 +26,10 @@ def check_root(root: Path) -> list[str]:
         violations.append("no-bugs-first must point to the ci-success bridge template")
     if "enterprise ruleset" in text.lower():
         violations.append("no-bugs-first must not claim an enterprise ruleset enforces ci-success")
+    if (root / "no-bugs-first/self_update.sh").exists():
+        violations.append("no-bugs-first must not runtime self-update from mutable remote code")
+    if (root / "no-new-bugs/self_update.sh").exists():
+        violations.append("no-new-bugs must not runtime self-update from mutable remote code")
     if ".github/workflows" in change_text:
         violations.append("no-new-bugs must not prescribe GitHub Actions for governed scheduled tests")
 

@@ -23,13 +23,10 @@ gates:
 
 # No Bugs First
 
-> **Step 0 — self-update (always run first).** Before doing anything else with
-> this skill, run `bash <this-skill-dir>/self_update.sh`. It verifies the canonical
-> upstream and server-resolved `main`, then updates only this skill's subtree, so unrelated dirty files or a
-> feature-branch checkout do not freeze the global install. Genuine local or
-> committed edits inside this skill still block replacement. Offline → it
-> silently uses the local copy. If it reports synced changes, re-read this
-> SKILL.md before proceeding. Zero local hooks or config.
+> **Installation trust.** This skill is installed by symlink from the reviewed
+> `owlspace_map/no-bugs-first` checkout. It performs no runtime network self-update;
+> update the canonical checkout through its normal reviewed Git flow, then re-read
+> this SKILL.md. This prevents mutable remote code from replacing doctrine at invocation time.
 
 `/no-new-bugs` is the **change-time** floor: every edit, don't regress. This skill is the
 **design-time** floor: shape the *whole repo* so the seven know-before-you-code dimensions

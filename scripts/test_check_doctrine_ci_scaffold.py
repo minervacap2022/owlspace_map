@@ -17,13 +17,14 @@ class DoctrineCiScaffoldTest(unittest.TestCase):
         templates = skill_dir / "templates"
         templates.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(skill_text)
+        change_dir = root / "no-new-bugs"
+        change_dir.mkdir()
         (templates / "woodpecker-ci.yaml").write_text("steps:\n")
         (templates / "ci-success-bridge.sh").write_text("#!/usr/bin/env bash\n")
         return root
 
     def add_change_skill(self, root: Path, text: str) -> None:
         change_dir = root / "no-new-bugs"
-        change_dir.mkdir()
         (change_dir / "SKILL.md").write_text(text)
 
     def test_accepts_canonical_woodpecker_scaffold(self):
@@ -59,6 +60,16 @@ class DoctrineCiScaffoldTest(unittest.TestCase):
         self.add_change_skill(root, "Put the cron under .github/workflows/tests.yml.\n")
         self.assertIn(
             "no-new-bugs must not prescribe GitHub Actions for governed scheduled tests",
+            check_root(root),
+        )
+
+    def test_rejects_runtime_self_updater(self):
+        root = self.make_root(
+            "Use templates/woodpecker-ci.yaml and templates/ci-success-bridge.sh.\n"
+        )
+        (root / "no-bugs-first/self_update.sh").write_text("git fetch origin main\n")
+        self.assertIn(
+            "no-bugs-first must not runtime self-update from mutable remote code",
             check_root(root),
         )
 
