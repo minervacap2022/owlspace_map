@@ -18,8 +18,8 @@ description: >-
 
 > **Step 0 — self-update (always run first).** Before doing anything else with
 > this skill, run `bash "$(dirname "$0")/self_update.sh"` from this skill's
-> directory — i.e. `bash <this-skill-dir>/self_update.sh`. It fetches the default
-> branch and updates only this skill's subtree, so unrelated dirty files or a
+> directory — i.e. `bash <this-skill-dir>/self_update.sh`. It verifies the canonical
+> upstream and server-resolved `main`, then updates only this skill's subtree, so unrelated dirty files or a
 > feature-branch checkout do not freeze the global install. Genuine local or
 > committed edits inside this skill still block replacement. Offline → it
 > silently uses the local copy. If it reports synced changes, re-read this
@@ -267,9 +267,10 @@ latency to pre-merge.
   `id` / `user_visible_symptom` / `lint` (regex rule) / `chaos` (runner or `null`) /
   `observable_signal` (the grep/curl that tells you in prod whether the fix holds).
   Removing an entry requires a note on what observability replaced it.
-- **Wire CODEOWNERS + a scheduled run.** Put it at your repo's `.github/CODEOWNERS`, e.g.
-  `src/feature/  @owner`. Core logic gets unit tests that run on a **schedule**: add
-  `on: schedule: - cron:` to a workflow under `.github/workflows/`. **Old tests are the
+- **Wire CODEOWNERS + a scheduled run.** Put ownership in the repository's canonical
+  ownership declaration. Core logic gets unit tests that run on a **schedule** through the
+  project's existing CI scheduler; governed OWLNexora repos use a Woodpecker cron pipeline,
+  not a GitHub Actions workflow. **Old tests are the
   trip-wire** — new changes continuously monitor old behavior, so the day a fresh edit
   silently breaks settled behavior, CI goes red. A test that doesn't *run* isn't protection.
   And a feedback loop that isn't committed and wired into CI is **not a feedback loop** —

@@ -24,8 +24,8 @@ gates:
 # No Bugs First
 
 > **Step 0 — self-update (always run first).** Before doing anything else with
-> this skill, run `bash <this-skill-dir>/self_update.sh`. It fetches the default
-> branch and updates only this skill's subtree, so unrelated dirty files or a
+> this skill, run `bash <this-skill-dir>/self_update.sh`. It verifies the canonical
+> upstream and server-resolved `main`, then updates only this skill's subtree, so unrelated dirty files or a
 > feature-branch checkout do not freeze the global install. Genuine local or
 > committed edits inside this skill still block replacement. Offline → it
 > silently uses the local copy. If it reports synced changes, re-read this
@@ -71,10 +71,11 @@ When this skill finishes, the repo has ALL of these, or it isn't done:
    `nexora-policy` `policy/01` + `policy/07`: fail-fast, no-fallback, the DDD layering gates), so a
    repo scaffolded by this skill passes the hard gate from commit #1. For a non-KLIK repo, the
    universal `repo-guards.sh` + that project's own checks are the layer.
-3. **A `ci-success` aggregate check** — one workflow job named exactly `ci-success`, gating on
-   lint + typecheck + the hermetic test lane + the guards lane. This is the contract the OWLNexora
-   enterprise ruleset (`nexora-policy`) requires; a repo set up by this skill slots straight into
-   governance. **Generic rule:** a project's coding rules have one canonical home and are referenced,
+3. **A `ci-success` aggregate check** — one Woodpecker step named exactly `ci-success`, depending on
+   lint + typecheck + the hermetic test lane + the guards lane, plus the canonical status bridge.
+   On GitHub Free private repositories this is evidence consumed after merge by the two-minute
+   `nexora-policy` ref guard; it is not a claim of pre-receive Rulesets enforcement. **Generic rule:**
+   a project's coding rules have one canonical home and are referenced,
    never re-stated. *KLIK instance:* that home is `nexora-policy/policy/` (`policy/07` service layout,
    `policy/08` skills-system).
 4. **A real hermetic test spine, including contract tests by default** — a failing-then-green test
@@ -175,9 +176,11 @@ the objective rejection through the project's hard-rules gate. KLIK's instance i
   application boundary, DB-in-repos, service instrumentation, deploy parity), so on KLIK the
   hand-rolled `repo-guards.sh` layer only covers invariants not yet a category there. On a non-KLIK
   repo, `repo-guards.sh` + that repo's own checks are the whole layer.
-- Add `.github/workflows/ci.yml` with lint + typecheck + test jobs and a terminal **`ci-success`**
-  job (`needs: [all]`, `if: always()`, fail unless every result == success). Template in
-  `templates/ci-success.yml`.
+- Add `.woodpecker/ci.yaml` with lint + typecheck + test + guards steps and terminal
+  **`ci-success`** / **`ci-failure`** status steps that depend on every blocking lane. Install
+  `.woodpecker/ci-success-bridge.sh` and keep the status context exact. Start from
+  `templates/woodpecker-ci.yaml` and `templates/ci-success-bridge.sh`; adapt commands and images,
+  not the self-hosted Woodpecker or status-posting contract.
 - Write the first hermetic test (RED → GREEN). Use an in-memory implementation of your own
   interface, assert observable output. Wire a pre-push hook if the repo has no CI runner.
 
@@ -216,8 +219,9 @@ See `references/map-integration.md` for the full procedure. In short:
 
 ### Step 7 — Verify from clean + open the PR
 Climb the `no-new-bugs` ladder: fresh clone/worktree → clean build → run the hermetic test →
-`ci-success` green on the PR. Then open a branch + PR (never direct-push; the repo you just set
-up has rs0/rs1 active under nexora-policy governance). The PR body lists the seven outputs with
+`ci-success` green on the PR. Then open a branch + PR (never direct-push). On GitHub Free private
+repos the committed ref declarations and two-minute ref guard are the compensating control; do not
+pretend an unavailable org/repository Rulesets dependency pre-blocks the write. The PR body lists the seven outputs with
 a checkbox each, so the reviewer sees the floor was met. Update the Unified Bitable if this is
 tracked work.
 
@@ -238,6 +242,7 @@ tracked work.
 
 ## What "done" means
 
-Run the checklist, not a feeling: all seven outputs exist, `ci-success` is green on a fresh
+Run the checklist, not a feeling: all outputs exist, the Woodpecker scaffold and status bridge are
+present, `ci-success` is green on a fresh
 clone, `cli.py brief` renders your intended sectors (not the default fallback), and the PR is
 open. If any of those is missing, it is not done — say which and why, with the command output.
