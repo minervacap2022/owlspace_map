@@ -1,0 +1,57 @@
+# Canonical governed-repo CI scaffold: self-hosted Woodpecker plus one GitHub
+# commit-status context named exactly `ci-success`. Adapt images and commands to
+# the stack; keep every blocking lane in both status steps' depends_on lists.
+labels:
+  platform: linux/amd64
+
+when:
+  - event: [pull_request, push]
+    branch: main
+
+steps:
+  lint:
+    image: oven/bun:1
+    commands:
+      - bun install --frozen-lockfile
+      - bun run lint
+
+  typecheck:
+    image: oven/bun:1
+    commands:
+      - bun install --frozen-lockfile
+      - bun run typecheck
+
+  test:
+    image: oven/bun:1
+    commands:
+      - bun install --frozen-lockfile
+      - bun test
+
+  guards:
+    image: debian:bookworm-slim
+    commands:
+      - bash scripts/repo-guards.sh
+
+  ci-success:
+    image: alpine:3.20
+    commands:
+      - apk add --no-cache bash curl jq openssl coreutils >/dev/null
+      - bash .woodpecker/ci-success-bridge.sh success
+    environment:
+      NEXORA_APP_ID: "2705324"
+      NEXORA_APP_PRIVATE_KEY:
+        from_secret: nexora_app_private_key
+    depends_on: [lint, typecheck, test, guards]
+
+  ci-failure:
+    image: alpine:3.20
+    commands:
+      - apk add --no-cache bash curl jq openssl coreutils >/dev/null
+      - bash .woodpecker/ci-success-bridge.sh failure
+    environment:
+      NEXORA_APP_ID: "2705324"
+      NEXORA_APP_PRIVATE_KEY:
+        from_secret: nexora_app_private_key
+    depends_on: [lint, typecheck, test, guards]
+    when:
+      - status: failure

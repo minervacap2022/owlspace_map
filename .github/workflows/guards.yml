@@ -65,16 +65,19 @@ jobs:
         run: cd scripts && python3 test_check_simulation_contract_skill_refs.py
       - name: Skill installer regression (no nested skill dirs)
         run: python3 scripts/test_install_skill_symlink.py
+      - name: Doctrine CI scaffold regression
+        run: python3 scripts/test_check_doctrine_ci_scaffold.py
+      - name: Doctrine self-update trust regression
+        run: python3 scripts/test_doctrine_self_update.py
       - name: Every producer skill declares a gates block
         run: python3 scripts/check_producer_gates.py
       - name: Core skills route to canonical Simulation Contract policy
         run: python3 scripts/check_simulation_contract_skill_refs.py
+      - name: Doctrine CI scaffold contract
+        run: python3 scripts/check_doctrine_ci_scaffold.py
 
-  # Aggregate gate for the nexora rs1 ruleset (required status check = "ci-success").
-  # Without it EVERY PR here is BLOCKED forever — the rule was added org-wide but this
-  # repo had no job emitting the context (owl-agent#30, owl-backend#2 got theirs; this
-  # repo was missed). `if: always()` so it runs even when an upstream job fails, then
-  # fails the gate explicitly — a skipped required check also blocks the merge.
+  # Aggregate evidence context consumed by nexora-policy governance. `if: always()`
+  # makes upstream failure explicit instead of silently skipping the status.
   ci-success:
     needs: [sector-map, catalog, producer-gates]
     if: always()
