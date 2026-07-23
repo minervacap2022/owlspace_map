@@ -3773,3 +3773,30 @@ bugs:
     message: The pane command is already single-quoted for outer bash; nested single quotes split the inner script into multiple bash -c arguments.
   chaos:
     runner: null
+- id: BUG-2026-07-23-93f639
+  title: Codex hook adapter passed shell expressions as executable paths
+  date: '2026-07-23'
+  surface: frontend
+  source_files:
+  - Owl/Sources/App/macOS/Owl/Bootstrap/RoleSeeder.swift
+  - Owl/Tests/RoleSeederSubstitutionTests.swift
+  user_visible_symptom: |
+    Codex sessions displayed `No such file or directory (os error 2)` after
+    tool use and twice after each response. The role hook scripts existed and
+    were executable, but Codex executes hook commands directly rather than
+    expanding `$CLAUDE_CONFIG_DIR` or shell redirections. Stop showed the error
+    twice because two distinct Stop hooks failed the same way.
+  observable_signal: |
+    RoleSeederSubstitutionTests requires every command in the generated Codex
+    hooks.json adapter to start with `/bin/bash -lc`, while retaining Claude's
+    canonical async fields only in settings.json. In a live Codex session,
+    prompt, tool, and Stop hook failures must be absent and the role health log
+    must receive the Stop audit entries.
+  lint:
+  - rule: CODEX_HOOK_COMMANDS_REQUIRE_SHELL_ADAPTER
+    pattern: 'result\["command"\] = "/bin/bash -lc'
+    presence: required
+    path: Owl/Sources/App/macOS/Owl/Bootstrap/RoleSeeder.swift
+    message: Codex executes hooks directly, so the adapter must invoke a shell before using environment variables, redirection, backgrounding, or compound commands.
+  chaos:
+    runner: null
