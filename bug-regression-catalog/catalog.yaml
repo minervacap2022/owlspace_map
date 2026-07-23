@@ -3750,18 +3750,26 @@ bugs:
   user_visible_symptom: |
     Switching a Codex session from Standard to Fast could leave its terminal
     tile permanently loading. Switching back to Standard and clicking Reload
-    did not recover because respawn-pane errors were silently discarded after
-    the underlying tmux session had disappeared.
+    did not recover. The Fast argument assignment split the generated outer
+    bash invocation into multiple arguments, killing the pane script, while
+    respawn-pane errors were then silently discarded after the tmux session
+    disappeared.
   observable_signal: |
-    TmuxTests requires a missing-session respawn to throw, requires the shared
-    restart operation to recreate a missing session, and requires an existing
-    session to be respawned in place. Reload and per-session provider, thinking,
-    and Fast controls all use that shared recovery operation.
+    OwldHelpersTests requires the generated pane command to pass one complete
+    script argument to inner bash. TmuxTests requires a missing-session respawn
+    to throw, requires the shared restart operation to recreate a missing
+    session, and requires an existing session to be respawned in place. Reload
+    and per-session provider, thinking, and Fast controls use that recovery.
   lint:
   - rule: TMUX_RESPAWN_MUST_NOT_SWALLOW_FAILURE
     pattern: 'try\? runRaw\(\["respawn-pane"'
     presence: forbidden
     path: Owl/Sources/App/macOS/Owl/TmuxControl/Tmux.swift
     message: respawn-pane failures must surface so a missing session can be recreated instead of leaving the tile permanently loading.
+  - rule: CODEX_FAST_ARGS_MUST_NOT_SPLIT_OUTER_BASH
+    pattern: "_OWL_CODEX_FAST_ARGS='"
+    presence: forbidden
+    path: Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
+    message: The pane command is already single-quoted for outer bash; nested single quotes split the inner script into multiple bash -c arguments.
   chaos:
     runner: null
