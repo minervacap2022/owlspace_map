@@ -3738,3 +3738,30 @@ bugs:
     message: Official provider mode must clear the prior built-in model alias before launching Claude Code.
   chaos:
     runner: null
+- id: BUG-2026-07-23-158ea0
+  title: Session mode changes could not recover a missing tmux pane
+  date: '2026-07-23'
+  surface: frontend
+  source_files:
+  - Owl/Sources/App/macOS/Owl/Daemon/Owld.swift
+  - Owl/Sources/App/macOS/Owl/OwlAppDelegate.swift
+  - Owl/Sources/App/macOS/Owl/TmuxControl/Tmux.swift
+  - Owl/Tests/TmuxTests.swift
+  user_visible_symptom: |
+    Switching a Codex session from Standard to Fast could leave its terminal
+    tile permanently loading. Switching back to Standard and clicking Reload
+    did not recover because respawn-pane errors were silently discarded after
+    the underlying tmux session had disappeared.
+  observable_signal: |
+    TmuxTests requires a missing-session respawn to throw, requires the shared
+    restart operation to recreate a missing session, and requires an existing
+    session to be respawned in place. Reload and per-session provider, thinking,
+    and Fast controls all use that shared recovery operation.
+  lint:
+  - rule: TMUX_RESPAWN_MUST_NOT_SWALLOW_FAILURE
+    pattern: 'try\? runRaw\(\["respawn-pane"'
+    presence: forbidden
+    path: Owl/Sources/App/macOS/Owl/TmuxControl/Tmux.swift
+    message: respawn-pane failures must surface so a missing session can be recreated instead of leaving the tile permanently loading.
+  chaos:
+    runner: null
