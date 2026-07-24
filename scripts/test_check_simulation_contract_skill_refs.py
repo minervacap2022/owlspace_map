@@ -32,6 +32,24 @@ class SimulationContractSkillRefsTest(unittest.TestCase):
             self.assertEqual(len(violations), 2)
             self.assertTrue(all("policy/13" in violation for violation in violations))
 
+    def test_legacy_prompt_variables_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            content = "\n".join(REQUIRED_TEXT) + "\nLegacy `variables` remain admitted."
+            self.write_fixture(root, content)
+            violations = check_root(root)
+            self.assertEqual(len(violations), 2)
+            self.assertTrue(all("variables" in violation for violation in violations))
+
+    def test_partial_prompt_owner_migration_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            content = "\n".join(REQUIRED_TEXT) + "\nPartial migration remains admitted."
+            self.write_fixture(root, content)
+            violations = check_root(root)
+            self.assertEqual(len(violations), 2)
+            self.assertTrue(all("partial migration" in violation.lower() for violation in violations))
+
     def test_live_skills_conform(self) -> None:
         root = Path(__file__).resolve().parent.parent
         self.assertEqual(check_root(root), [])

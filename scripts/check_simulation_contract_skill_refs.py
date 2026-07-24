@@ -12,6 +12,19 @@ REQUIRED_TEXT = (
     "Owner Simulation Contract",
     "nexora-policy/policy/13-simulation-contracts.md",
     "SIMULATION_CONTRACT_REQUIRED",
+    "Simulation protocol version `6.0.0`",
+    "`klik-simulation-sdk` version `2.0.0`",
+    "literal `required_tokens`",
+    "same canonical production prompt source",
+    "removed `variables` field",
+    "Protocol-v5 catalogs",
+    "dual-version compatibility",
+    "full prompt-owner inventory",
+    "partial migration fails admission",
+)
+FORBIDDEN_TEXT = (
+    "Legacy `variables` remain admitted.",
+    "Partial migration remains admitted.",
 )
 
 
@@ -26,6 +39,9 @@ def check_root(root: Path) -> list[str]:
         for required in REQUIRED_TEXT:
             if required not in content:
                 violations.append(f"{relative} must reference {required}")
+        for forbidden in FORBIDDEN_TEXT:
+            if forbidden in content:
+                violations.append(f"{relative} must not admit {forbidden}")
     return violations
 
 
