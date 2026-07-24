@@ -104,6 +104,12 @@ When this skill finishes, the repo has ALL of these, or it isn't done:
    contract tests, documentation, and project-gate wiring before production admission. The
    canonical rule is `nexora-policy/policy/13-simulation-contracts.md`; do not copy owner
    prompts/defaults into a consumer or claim coverage without owner-validated evidence.
+   Prompt owners use Simulation protocol version `6.0.0` and
+   `klik-simulation-sdk` version `2.0.0`. They publish literal `required_tokens`
+   from the same canonical production prompt source.
+   Empty, duplicate, or absent tokens are rejected; the removed `variables` field, inferred
+   syntax, aliases, Protocol-v5 catalogs, and dual-version compatibility are prohibited.
+   Validate the full prompt-owner inventory; partial migration fails admission.
 
 Each output is a check or an artifact — none is "we'll remember to." That is the whole point.
 
