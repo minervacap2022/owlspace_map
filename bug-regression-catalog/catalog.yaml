@@ -3800,3 +3800,41 @@ bugs:
     message: Codex executes hooks directly, so the adapter must invoke a shell before using environment variables, redirection, backgrounding, or compound commands.
   chaos:
     runner: null
+- id: BUG-2026-07-27-b92051
+  title: Grouped sector roots overwrote import evidence and polluted runtime context edges
+  date: '2026-07-27'
+  surface: tooling-ci
+  source_files:
+  - sector_map/extract.py
+  - sector_map/test_extract.py
+  user_visible_symptom: |
+    A truthful declared dependency could fail the hard-zero map gate even though
+    production imports existed. Reusing one sector id for several physical roots
+    kept only the final root, rendered that root repeatedly, and hid earlier
+    imports. Once aggregation was repaired, external dotted imports that happened
+    to end in a local file stem and imports from test files could create additional
+    false runtime cycles.
+  observable_signal: |
+    The three focused EndToEnd regressions must pass. A grouped sector renders
+    once with files and weighted imports from every root; `sqlalchemy.orm` never
+    resolves to an unrelated local `orm.py`; and test imports remain visible to
+    blast-radius analysis without becoming runtime context-map edges. Against
+    Klik, `audio-client-pipeline -> llm` must be a parsed customer-supplier edge.
+  lint:
+  - rule: SECTOR_MAP_GROUPED_ROOTS_REGRESSION_REQUIRED
+    pattern: 'def test_duplicate_sector_roots_aggregate_imports_once'
+    presence: required
+    path: sector_map/test_extract.py
+    message: The map must retain a RED-first regression proving all roots sharing one logical sector id contribute exactly once.
+  - rule: SECTOR_MAP_EXTERNAL_IMPORT_REGRESSION_REQUIRED
+    pattern: 'def test_python_external_dotted_import_does_not_match_local_file_stem'
+    presence: required
+    path: sector_map/test_extract.py
+    message: Python package imports must not become cross-sector edges through coincidental local file stems.
+  - rule: SECTOR_MAP_RUNTIME_CONTEXT_REGRESSION_REQUIRED
+    pattern: 'def test_test_import_does_not_create_runtime_context_cycle'
+    presence: required
+    path: sector_map/test_extract.py
+    message: Test dependencies must remain in change-safety evidence without polluting the production context map.
+  chaos:
+    runner: null

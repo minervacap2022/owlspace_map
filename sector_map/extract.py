@@ -589,32 +589,54 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     resolve_mode = prof.get("resolve", "py_stem")        # 'py_stem' | 'kt_pkg' (package prefix)
     prefix_norm = prefix.replace(".", "/").replace("::", "/")
 
-    # gather per sector — UNIVERSAL tree-sitter parsing (any language by suffix)
+    # A logical sector may intentionally span several physical roots. Group by id
+    # before extraction so every root contributes instead of the last one winning.
+    sector_defs: dict[str, list[dict]] = {}
+    for sector in prof["sectors"]:
+        sector_defs.setdefault(sector["id"], []).append(sector)
+
+    # gather per logical sector — UNIVERSAL tree-sitter parsing (any language by suffix)
     raw: dict[str, dict] = {}
-    for s in prof["sectors"]:
-        d = src_base / s["root"]
-        files = _walk(d)
-        code = [f for f in files if f.suffix in LANGS]
-        symbols, imps, fimps = [], [], []
-        for f in code:
-            ex = _extract_file(f)
-            symbols += ex["symbols"]
-            fis = ex["imports"]
-            imps += fis
-            fimps += [(str(f.relative_to(repo)), imp) for imp in fis]
-        # tests (conventions are language-specific → profile-driven)
-        tfiles, tcount = [], 0
-        if is_kt and test_base:
-            td = test_base / s["root"]
-            tks = [f for f in _walk(td) if f.suffix == ".kt"]
-            tfiles = [str(f.relative_to(repo)) for f in tks]
-            tcount = sum(len(re.findall(r"@Test", f.read_text(encoding="utf-8", errors="ignore"))) for f in tks)
-        else:
-            tks = [f for f in files if _is_test_file(f)]
-            tfiles = [str(f.relative_to(repo)) for f in tks]
-            tcount = sum(_count_tests(t) for t in tks)
-        raw[s["id"]] = dict(files=files, code=code, symbols=symbols, imps=imps, fimps=fimps,
-                            loc=sum(_loc(f) for f in files), tfiles=tfiles, tcount=tcount, dir=d)
+    for sid, members in sector_defs.items():
+        files, code, symbols, imps, fimps, tfiles, dirs = [], [], [], [], [], [], []
+        tcount = 0
+        for sector in members:
+            directory = src_base / sector["root"]
+            dirs.append(directory)
+            root_files = _walk(directory)
+            root_code = [f for f in root_files if f.suffix in LANGS]
+            files += root_files
+            code += root_code
+            for file in root_code:
+                extracted = _extract_file(file)
+                symbols += extracted["symbols"]
+                imports = extracted["imports"]
+                imps += imports
+                fimps += [(str(file.relative_to(repo)), imp) for imp in imports]
+            # tests (conventions are language-specific → profile-driven)
+            if is_kt and test_base:
+                test_dir = test_base / sector["root"]
+                tests = [f for f in _walk(test_dir) if f.suffix == ".kt"]
+                tfiles += [str(f.relative_to(repo)) for f in tests]
+                tcount += sum(
+                    len(re.findall(r"@Test", f.read_text(encoding="utf-8", errors="ignore")))
+                    for f in tests
+                )
+            else:
+                tests = [f for f in root_files if _is_test_file(f)]
+                tfiles += [str(f.relative_to(repo)) for f in tests]
+                tcount += sum(_count_tests(test) for test in tests)
+        raw[sid] = dict(
+            files=files,
+            code=code,
+            symbols=symbols,
+            imps=imps,
+            fimps=fimps,
+            loc=sum(_loc(file) for file in files),
+            tfiles=tfiles,
+            tcount=tcount,
+            dirs=dirs,
+        )
 
     # drill-down: per-symbol nodes + the call graph. Three NATIVE providers, in
     # order of precision: a SCIP index (type-precise) > graphify (tree-sitter +
@@ -653,7 +675,11 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         sector_syms.setdefault(s["sector"], []).append(s)
 
     # import → sector resolution (universal): flat-module stem, or package prefix.
-    stem_map = {f.stem: sid for sid, r in raw.items() for f in r["code"]}
+    stem_owners: dict[str, set[str]] = {}
+    for sid, record in raw.items():
+        for file in record["code"]:
+            stem_owners.setdefault(file.stem, set()).add(sid)
+    stem_map = {stem: next(iter(owners)) for stem, owners in stem_owners.items() if len(owners) == 1}
     roots = sorted(((s["id"], s["root"]) for s in prof["sectors"]), key=lambda x: -len(x[1]))
     # path (minus extension) → sector, for resolving relative imports / local includes
     file_index = {re.sub(r"\.\w+$", "", str(f.relative_to(repo))): sid
@@ -673,12 +699,12 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         p = imp.replace(".", "/").replace("::", "/")
         if resolve_mode == "py_stem":
             parts = p.split("/")
-            if parts[0] in stem_map:               # flat module: import name == a file stem
-                return stem_map[parts[0]]
             for sid, root in roots:                # packaged import a.b.c → a leading component is the sector dir
                 if p == root or p.startswith(root + "/"):
                     return sid
-            return stem_map.get(parts[-1])         # last-ditch: the trailing module's file stem
+            if len(parts) == 1:                    # flat module: import name == one unambiguous file stem
+                return stem_map.get(parts[0])
+            return None                            # never map external.pkg through a coincidental trailing stem
         if prefix_norm and p.startswith(prefix_norm):
             p = p[len(prefix_norm):].lstrip("/")
         for sid, root in roots:
@@ -692,11 +718,14 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         return None
 
     hard: dict[tuple[str, str], int] = {}
+    runtime_hard: dict[tuple[str, str], int] = {}
     for sid, r in raw.items():
         for frel, imp in r["fimps"]:
             b = resolve(imp, frel)
             if b and b != sid:
                 hard[(sid, b)] = hard.get((sid, b), 0) + 1
+                if not _is_test_file(repo / frel):
+                    runtime_hard[(sid, b)] = runtime_hard.get((sid, b), 0) + 1
 
     edges = [{"src": a, "dst": b, "weight": w, "kind": "depends_on"} for (a, b), w in hard.items()]
     if resolve_mode == "py_stem":  # prose references only meaningful for the flat-module doc repo
@@ -716,8 +745,8 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     def cycles_with(sid: str) -> list[str]:
         # sectors this one mutually depends on (a→b AND b→a) — a real
         # clean-architecture violation the map should flag, not hide.
-        deps = {b for (a, b) in hard if a == sid}
-        return sorted(d for d in deps if (d, sid) in hard)
+        deps = {b for (a, b) in runtime_hard if a == sid}
+        return sorted(d for d in deps if (d, sid) in runtime_hard)
 
     incidents = _catalog_entries(prof.get("catalog_project")) if prof.get("catalog_project") else []
     remote = _git(git_root, ["remote", "get-url", "origin"])
@@ -735,26 +764,41 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
     cov = _coverage(repo, prof.get("coverage_report", "coverage.xml"))  # real line coverage if present
 
     sectors_meta = []
-    for s in prof["sectors"]:
-        sid, r = s["id"], raw[s["id"]]
+    for sid, members in sector_defs.items():
+        r = raw[sid]
+        member_roots = [member["root"] for member in members]
         blob = _blob(r["code"], set(LANGS))
         blast = direct_consumers(sid)
         cyc = cycles_with(sid)
         deps = sorted({b for (a, b) in hard if a == sid})
-        rel = str(r["dir"].relative_to(repo)) if r["dir"].exists() else f"{prof.get('src_base','')}/{s['root']}"
-        gitpath = str(src_rel / s["root"])
-        recent = _git(git_root, ["log", "--oneline", "-5", "--", gitpath]).splitlines()
-        total_commits = len(_git(git_root, ["log", "--oneline", "--", gitpath]).splitlines())
+        gitpaths = [str(src_rel / root) for root in member_roots]
+        recent = _git(git_root, ["log", "--oneline", "-5", "--", *gitpaths]).splitlines()
+        total_commits = len(_git(git_root, ["log", "--oneline", "--", *gitpaths]).splitlines())
 
         # Behavior: regex invariants + the structured forbidden/required card (P1)
         invariants = _behavior(blob, prof["behavior"])
-        constraints = s.get("constraints") or {"forbidden": [], "required": []}
+        constraints = {
+            key: list(dict.fromkeys(value for member in members for value in member.get("constraints", {}).get(key, [])))
+            for key in ("forbidden", "required")
+        }
 
         # P1: the sector card — purpose from the profile, else auto-ingested from
         # the sector's own CLAUDE.md/README.md (the KK_auth convention, generalized).
-        card = collectors.sector_card(r["dir"]) if r["dir"].exists() else {"purpose": None, "docs": []}
-        purpose = s.get("purpose") or card["purpose"]
-        sector_docs = [str(Path(p).relative_to(repo)) for p in card["docs"]] + s.get("docs", [])
+        cards = [
+            collectors.sector_card(directory)
+            if directory.exists()
+            else {"purpose": None, "docs": []}
+            for directory in r["dirs"]
+        ]
+        purpose = next(
+            (value for value in [*(member.get("purpose") for member in members),
+                                 *(card["purpose"] for card in cards)] if value),
+            None,
+        )
+        sector_docs = list(dict.fromkeys(
+            [str(Path(path).relative_to(repo)) for card in cards for path in card["docs"]]
+            + [path for member in members for path in member.get("docs", [])]
+        ))
 
         # Context (#4): GENERIC — env vars + outbound URLs from the code, any language.
         deploy = _deploy_symlinks(sid, repo) if prof.get("deploy_symlinks") else []
@@ -775,15 +819,19 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
         crossproject = []
         if sid == "bug-regression-catalog" and catalog_projects:
             crossproject = [f"{k}: {v} incidents" for k, v in catalog_projects.items()]
-        rd = r["dir"] / "rules"
-        if rd.is_dir() and list(rd.glob("*.yaml")):
-            crossproject += [f"rules/{p.stem}.yaml" for p in sorted(rd.glob("*.yaml"))]
+        for directory in r["dirs"]:
+            rules_dir = directory / "rules"
+            if rules_dir.is_dir() and list(rules_dir.glob("*.yaml")):
+                crossproject += [f"rules/{path.stem}.yaml" for path in sorted(rules_dir.glob("*.yaml"))]
 
         # Intent & History: incidents whose source paths fall under this sector's
         # root (generic), keeping the legacy app/<root>/ KMP layout matching.
         def _hits(srcs):
-            return any(f"/{s['root']}/" in f"/{sf}" or f"app/{s['root']}/" in str(sf)
-                       for sf in srcs)
+            return any(
+                f"/{root}/" in f"/{source_file}" or f"app/{root}/" in str(source_file)
+                for source_file in srcs
+                for root in member_roots
+            )
         sector_incidents = [t for (_, t, srcs, _) in incidents if _hits(srcs)]
         # G13: the catalog's observable_signal = "how you'd know THIS broke again".
         sector_signals = [{"incident": t, "signal": sig}
@@ -871,9 +919,9 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                    for x in syms.values()]
     # P3: relationship-typed edges + declared-vs-parsed findings (context-map layer)
     declared = prof.get("edges", [])
-    contextmap = {"edges": collectors.typed_edges(hard, declared),
+    contextmap = {"edges": collectors.typed_edges(runtime_hard, declared),
                   "declared": declared,
-                  "findings": collectors.contextmap_findings(hard, declared)}
+                  "findings": collectors.contextmap_findings(runtime_hard, declared)}
 
     # Extraction fidelity — make "empty because no extractor for this language"
     # DISTINGUISHABLE from "empty repo" (re-applied; #25 dropped #24's signal on a pre-#24

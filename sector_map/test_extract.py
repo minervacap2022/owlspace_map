@@ -65,6 +65,134 @@ class CallGraph(unittest.TestCase):
 
 
 class EndToEnd(unittest.TestCase):
+    def test_duplicate_sector_roots_aggregate_imports_once(self):
+        d = _write({
+            "asr/api.py": "from llm.client import Client\n",
+            "speaker/name.py": "from llm.client import Client\n",
+            "mobile/view.py": "def render(): return None\n",
+            "llm/client.py": "class Client: pass\n",
+        })
+        prof = {
+            "label": "grouped",
+            "lang": "py",
+            "git_root": ".",
+            "src_base": "",
+            "test_base": "",
+            "import_prefix": "",
+            "resolve": "py_stem",
+            "catalog_project": None,
+            "deploy_symlinks": False,
+            "behavior": [],
+            "boundaries_global": [],
+            "boundaries_by_sector": {},
+            "sectors": [
+                {
+                    "id": "audio",
+                    "root": "asr",
+                    "docs": ["docs/asr.md"],
+                    "constraints": {"forbidden": ["copied prompts"]},
+                },
+                {
+                    "id": "audio",
+                    "root": "speaker",
+                    "docs": ["docs/speaker.md"],
+                    "constraints": {"required": ["owner contracts"]},
+                },
+                {"id": "audio", "root": "mobile"},
+                {"id": "llm", "root": "llm"},
+            ],
+        }
+
+        graph = extract.build_graph(d, prof)
+
+        audio_sectors = [sector for sector in graph["sectors"] if sector["id"] == "audio"]
+        self.assertEqual(len(audio_sectors), 1, "one logical sector must render once")
+        self.assertEqual(
+            set(audio_sectors[0]["dimensions"]["structure"]["files"]),
+            {"asr/api.py", "mobile/view.py", "speaker/name.py"},
+        )
+        self.assertEqual(
+            audio_sectors[0]["dimensions"]["behavior"]["constraints"],
+            {"forbidden": ["copied prompts"], "required": ["owner contracts"]},
+        )
+        self.assertEqual(
+            audio_sectors[0]["dimensions"]["intent_history"]["docs"],
+            ["docs/asr.md", "docs/speaker.md"],
+        )
+        edge = next(
+            item
+            for item in graph["edges"]
+            if item["kind"] == "depends_on" and item["src"] == "audio" and item["dst"] == "llm"
+        )
+        self.assertEqual(edge["weight"], 2, "imports from every grouped root must contribute")
+
+    def test_python_external_dotted_import_does_not_match_local_file_stem(self):
+        d = _write({
+            "identity/repository.py": "from sqlalchemy.orm import Session\n",
+            "execution/orm.py": "class ExecutionRecord: pass\n",
+        })
+        prof = {
+            "label": "python",
+            "lang": "py",
+            "git_root": ".",
+            "src_base": "",
+            "test_base": "",
+            "import_prefix": "",
+            "resolve": "py_stem",
+            "catalog_project": None,
+            "deploy_symlinks": False,
+            "behavior": [],
+            "boundaries_global": [],
+            "boundaries_by_sector": {},
+            "sectors": [
+                {"id": "identity", "root": "identity"},
+                {"id": "execution", "root": "execution"},
+            ],
+        }
+
+        graph = extract.build_graph(d, prof)
+
+        self.assertNotIn(
+            ("identity", "execution"),
+            _dep_edges(graph),
+            "a third-party package must not resolve through a coincidental trailing file stem",
+        )
+
+    def test_test_import_does_not_create_runtime_context_cycle(self):
+        d = _write({
+            "shared/runtime.py": "def helper(): return 1\n",
+            "shared/test_contract.py": "from service.api import run\n",
+            "service/api.py": "from shared.runtime import helper\ndef run(): return helper()\n",
+        })
+        prof = {
+            "label": "python",
+            "lang": "py",
+            "git_root": ".",
+            "src_base": "",
+            "test_base": "",
+            "import_prefix": "",
+            "resolve": "py_stem",
+            "catalog_project": None,
+            "deploy_symlinks": False,
+            "behavior": [],
+            "boundaries_global": [],
+            "boundaries_by_sector": {},
+            "sectors": [
+                {"id": "shared", "root": "shared"},
+                {"id": "service", "root": "service"},
+            ],
+        }
+
+        graph = extract.build_graph(d, prof)
+
+        self.assertIn(("service", "shared"), _dep_edges(graph))
+        self.assertIn(("shared", "service"), _dep_edges(graph), "tests remain visible to blast-radius analysis")
+        self.assertNotIn(
+            ("shared", "service"),
+            _context_edges(graph),
+            "test coverage belongs in the test dimension, not the runtime context map",
+        )
+
     def test_go_blast_and_leaf(self):
         d = _write({
             "core/t.go": "package core\ntype A struct{}\nfunc New() *A { return &A{} }",
@@ -105,6 +233,10 @@ def _prof(lang, prefix, sectors):
 
 def _dep_edges(g):
     return {(e["src"], e["dst"]) for e in g["edges"] if e["kind"] == "depends_on"}
+
+
+def _context_edges(g):
+    return {(e["src"], e["dst"]) for e in g["contextmap"]["edges"]}
 
 
 class MultiLangEdges(unittest.TestCase):
