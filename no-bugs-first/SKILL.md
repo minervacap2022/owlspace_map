@@ -104,6 +104,10 @@ When this skill finishes, the repo has ALL of these, or it isn't done:
    contract tests, documentation, and project-gate wiring before production admission. The
    canonical rule is `nexora-policy/policy/13-simulation-contracts.md`; do not copy owner
    prompts/defaults into a consumer or claim coverage without owner-validated evidence.
+9. **An LLM Provider Admission seam for every new gateway provider path** — route the
+   design to canonical `nexora-policy/policy/12-infrastructure.md` and the gateway-owner
+   `LLM_PROVIDER_ADMISSION_REQUIRED` gate. The provider must not gain a separate DB/UI,
+   service-secret, alias, fallback, or provider-specific admission path.
 
 Each output is a check or an artifact — none is "we'll remember to." That is the whole point.
 

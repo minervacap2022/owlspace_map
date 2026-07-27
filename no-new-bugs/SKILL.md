@@ -207,6 +207,11 @@ shared one (that is how duplication-drift starts).
   coverage. Verify the real target uses the owner contract and latest state. Canonical policy:
   `nexora-policy/policy/13-simulation-contracts.md`; KLIK rejects drift through
   `SIMULATION_CONTRACT_REQUIRED`.
+- **LLM Provider Admission stays gateway-owned.** Any provider, model, credential-reference,
+  or route change follows canonical `nexora-policy/policy/12-infrastructure.md` and the owner
+  `LLM_PROVIDER_ADMISSION_REQUIRED` gate. Establish RED proving an unadmitted provider cannot
+  become requestable; do not create a DB/UI, service-secret, alias, fallback, or provider-specific
+  path around the owner contract.
 - **Shrink the blast radius — decompose the God-file.** An oversized unit *is* a bug
   factory: a 3,785-LOC god-file touched 61× bred regressions because every change reached
   too far. When the partition you must touch is too big to reason about, split it along the

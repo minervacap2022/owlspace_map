@@ -63,6 +63,8 @@ jobs:
         run: cd scripts && python3 test_check_producer_gates.py
       - name: Simulation Contract skill routing test
         run: cd scripts && python3 test_check_simulation_contract_skill_refs.py
+      - name: LLM Provider Admission skill routing test
+        run: cd scripts && python3 test_check_llm_provider_admission_skill_refs.py
       - name: Skill installer regression (no nested skill dirs)
         run: python3 scripts/test_install_skill_symlink.py
       - name: Doctrine CI scaffold regression
@@ -71,6 +73,8 @@ jobs:
         run: python3 scripts/check_producer_gates.py
       - name: Core skills route to canonical Simulation Contract policy
         run: python3 scripts/check_simulation_contract_skill_refs.py
+      - name: Core skills route to canonical LLM Provider Admission policy
+        run: python3 scripts/check_llm_provider_admission_skill_refs.py
       - name: Doctrine CI scaffold contract
         run: python3 scripts/check_doctrine_ci_scaffold.py
 
