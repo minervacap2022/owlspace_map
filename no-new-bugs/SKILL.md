@@ -206,7 +206,12 @@ shared one (that is how duplication-drift starts).
   copy prompts/defaults into a consumer, access the owner database directly, or fake registered
   coverage. Verify the real target uses the owner contract and latest state. Canonical policy:
   `nexora-policy/policy/13-simulation-contracts.md`; KLIK rejects drift through
-  `SIMULATION_CONTRACT_REQUIRED`.
+  `SIMULATION_CONTRACT_REQUIRED`. Prompt owners use Simulation protocol version `6.0.0`
+  and `klik-simulation-sdk` version `2.0.0`. They publish literal `required_tokens` from the
+  same canonical production prompt source. Empty, duplicate, or absent tokens are rejected;
+  the removed `variables` field, inferred syntax, aliases, Protocol-v5 catalogs, and
+  dual-version compatibility are prohibited. Validate the full prompt-owner inventory;
+  partial migration fails admission.
 - **Shrink the blast radius — decompose the God-file.** An oversized unit *is* a bug
   factory: a 3,785-LOC god-file touched 61× bred regressions because every change reached
   too far. When the partition you must touch is too big to reason about, split it along the
