@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import sysconfig
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,6 +156,26 @@ def _treesitter_available() -> bool:
 
 
 _tree_cache: dict = {}  # path -> (mtime, (grammar, root_node, def_types))
+
+
+def _stdlib_module_names() -> frozenset[str]:
+    names = getattr(sys, "stdlib_module_names", None)
+    if names is not None:
+        return frozenset(names)
+
+    stdlib = Path(sysconfig.get_path("stdlib") or "")
+    try:
+        entries = tuple(stdlib.iterdir())
+    except OSError:
+        entries = ()
+    return frozenset(sys.builtin_module_names) | frozenset(
+        entry.stem for entry in entries if entry.suffix == ".py"
+    ) | frozenset(
+        entry.name for entry in entries if (entry / "__init__.py").is_file()
+    )
+
+
+PYTHON_STDLIB_MODULES = _stdlib_module_names()
 
 
 def _tree(path: Path):
@@ -703,6 +724,8 @@ def build_graph(repo: Path | str | None = None, profile: dict | None = None) -> 
                 if p == root or p.startswith(root + "/"):
                     return sid
             if len(parts) == 1:                    # flat module: import name == one unambiguous file stem
+                if parts[0] in PYTHON_STDLIB_MODULES:
+                    return None
                 return stem_map.get(parts[0])
             return None                            # never map external.pkg through a coincidental trailing stem
         if prefix_norm and p.startswith(prefix_norm):

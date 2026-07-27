@@ -158,6 +158,44 @@ class EndToEnd(unittest.TestCase):
             "a third-party package must not resolve through a coincidental trailing file stem",
         )
 
+    def test_python_stdlib_bare_import_does_not_match_local_file_stem(self):
+        d = _write({
+            "productivity/minutes.py": "from types import SimpleNamespace\n",
+            "execution/types.py": "class ExecutionType: pass\n",
+        })
+        prof = {
+            "label": "python",
+            "lang": "py",
+            "git_root": ".",
+            "src_base": "",
+            "test_base": "",
+            "import_prefix": "",
+            "resolve": "py_stem",
+            "catalog_project": None,
+            "deploy_symlinks": False,
+            "behavior": [],
+            "boundaries_global": [],
+            "boundaries_by_sector": {},
+            "sectors": [
+                {"id": "productivity", "root": "productivity"},
+                {"id": "execution", "root": "execution"},
+            ],
+        }
+
+        saved_parsers = extract._parsers.copy()
+        extract._parsers["python"] = None
+        try:
+            graph = extract.build_graph(d, prof)
+        finally:
+            extract._parsers.clear()
+            extract._parsers.update(saved_parsers)
+
+        self.assertNotIn(
+            ("productivity", "execution"),
+            _dep_edges(graph),
+            "a Python standard-library import must not resolve through a local file stem",
+        )
+
     def test_test_import_does_not_create_runtime_context_cycle(self):
         d = _write({
             "shared/runtime.py": "def helper(): return 1\n",
