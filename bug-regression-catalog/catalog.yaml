@@ -3838,3 +3838,31 @@ bugs:
     message: Test dependencies must remain in change-safety evidence without polluting the production context map.
   chaos:
     runner: null
+- id: BUG-2026-07-29-6e8ae3
+  title: Manual Simulation administration instantiated unrelated migration and live E2E workflows
+  date: '2026-07-29'
+  surface: tooling-ci
+  source_files:
+  - /opt/Klik/.woodpecker/simulation-admin.yaml
+  - /opt/Klik/.woodpecker/migrate.yaml
+  - /opt/Klik/.woodpecker/e2e.yaml
+  - /opt/Klik/Scripts/test_manual_workflow_selection.sh
+  user_visible_symptom: |
+    A protected Simulation Administrator mutation could succeed while unrelated
+    migration and live E2E workflows were instantiated by the same generic manual
+    event. An unrelated E2E precondition then marked the top-level pipeline failed,
+    obscuring the successful real-user authorization change and encouraging unsafe
+    retries of an already-committed optimistic-concurrency mutation.
+  observable_signal: |
+    Scripts/test_manual_workflow_selection.sh must pass against the real three
+    workflow files through Woodpecker 3.16's compiler. A production administrator
+    run must show only simulation-admin in `woodpecker-cli pipeline ps`, and its
+    top-level status must equal the management mutation result.
+  lint:
+  - rule: KLIK_MANUAL_WORKFLOW_SELECTOR_CONTRACT_REQUIRED
+    pattern: 'sh Scripts/test_manual_workflow_selection\.sh'
+    presence: required
+    path: .woodpecker/ci.yaml
+    message: The compiler-backed manual workflow selector contract must remain wired into Klik ci-success.
+  chaos:
+    runner: null
