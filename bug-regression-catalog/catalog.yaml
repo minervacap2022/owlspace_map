@@ -3866,3 +3866,35 @@ bugs:
     message: The compiler-backed manual workflow selector contract must remain wired into Klik ci-success.
   chaos:
     runner: null
+- id: BUG-2026-07-30-99377b
+  title: Ambiguous Simulation writes lost durable receipt authority and could be retried as new writes
+  date: '2026-07-30'
+  surface: frontend-backend
+  source_files:
+  - klik-simulation-studio/backend/src/klik_simulation_studio/application/mutations.py
+  - klik-simulation-studio/backend/src/klik_simulation_studio/infrastructure/mutation_retry_receipts.py
+  - klik-simulation-studio/frontend/src/features/workbench/MutableDataObjectPanel.tsx
+  user_visible_symptom: |
+    A real-user mutation whose first response was lost could become impossible to
+    reconcile after a short-lived owner reference token expired. If reconciliation
+    also returned outcome-unknown, the browser discarded the reusable receipt; a
+    refresh then allowed a second write even though the first write might already
+    have committed.
+  observable_signal: |
+    The backend expiry-crossing regression must reconcile from the signed receipt
+    without accepting original selection or reference tokens. The frontend repeated-
+    ambiguity regression must keep one idempotency key and receipt across a page
+    remount, block a new write, and clear sessionStorage only after a validated result.
+  lint:
+  - rule: SIMULATION_RECEIPT_ONLY_RETRY_REGRESSION_REQUIRED
+    pattern: 'def test_create_retry_uses_receipt_after_reference_selection_expires'
+    presence: required
+    path: backend/tests/unit/test_mutations.py
+    message: Receipt-only reconciliation must remain independent of expired owner selection and reference tokens.
+  - rule: SIMULATION_REPEATED_AMBIGUITY_REGRESSION_REQUIRED
+    pattern: "it\\('preserves one unresolved write across repeated ambiguity until reconciliation succeeds'"
+    presence: required
+    path: frontend/src/features/workbench/MutableDataObjectPanel.test.tsx
+    message: The browser must preserve one unresolved mutation receipt across repeated outcome-unknown responses and reloads.
+  chaos:
+    runner: null
